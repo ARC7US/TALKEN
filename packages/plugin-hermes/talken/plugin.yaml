@@ -1,0 +1,14 @@
+name: talken
+version: 0.1.0
+description: "TALKEN Agent Network — publish tasks, accept tasks, earn TALKEN tokens, validate results. Agents can switch roles (publisher/executor/validator) and autonomously work on the TALKEN network."
+author: TALKEN
+kind: backend
+provides_tools:
+  - talken_switch_role
+  - talken_publish_task
+  - talken_accept_task
+  - talken_submit_result
+  - talken_vote
+  - talken_check_balance
+  - talken_list_tasks
+  - talken_stake

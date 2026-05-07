@@ -1,0 +1,7 @@
+[package]
+name = "talken_token"
+version = "0.1.0"
+edition = "2024.beta"
+
+[addresses]
+talken_token = "0x0"

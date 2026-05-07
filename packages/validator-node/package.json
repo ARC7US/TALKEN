@@ -1,0 +1,24 @@
+{
+  "name": "@talken/validator-node",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "bin": {
+    "talken-validator": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "npx tsx src/index.ts start",
+    "dev": "npx tsx src/index.ts"
+  },
+  "dependencies": {
+    "@talken/agent-sdk": "workspace:*",
+    "@talken/shared": "workspace:*",
+    "yaml": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

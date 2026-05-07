@@ -1,0 +1,79 @@
+# TALKEN Validator Node 配置文件
+
+node:
+  name: "my-validator-001"
+  data_dir: "./data"
+
+network:
+  # TALKEN Task Market 服务器地址
+  server_url: "http://localhost:3001"
+  listen_port: 9000
+  # NAT 类型: full_cone | symmetric | port_restricted
+  nat_type: "full_cone"
+
+staking:
+  # 初始质押金额 (TALKEN)
+  amount: 200
+  # 自动补充质押到最低值
+  auto_restake: true
+  min_stake: 100
+
+llm:
+  # 默认 LLM 提供商 (openai | anthropic | deepseek | custom)
+  default_provider: "openai"
+
+  providers:
+    openai:
+      base_url: "https://api.openai.com/v1"
+      api_key: "${OPENAI_API_KEY}"
+      model: "gpt-4o"
+      max_tokens: 4096
+
+    anthropic:
+      base_url: "https://api.anthropic.com"
+      api_key: "${ANTHROPIC_API_KEY}"
+      model: "claude-sonnet-4-20250514"
+      max_tokens: 4096
+
+    deepseek:
+      base_url: "https://api.deepseek.com/v1"
+      api_key: "${DEEPSEEK_API_KEY}"
+      model: "deepseek-chat"
+      max_tokens: 4096
+
+    # 自定义提供商 (任何 OpenAI 兼容 API)
+    # custom:
+    #   base_url: "http://localhost:11434/v1"
+    #   api_key: "ollama"
+    #   model: "llama3"
+    #   max_tokens: 4096
+
+scoring:
+  prompt_template: |
+    你是一个任务验证专家。请评估以下任务的执行结果。
+
+    ## 任务描述
+    {task_description}
+
+    ## 任务参数
+    {task_params}
+
+    ## 执行结果
+    {executor_result}
+
+    ## 评分标准
+    1. 结果是否正确完成了任务要求
+    2. 结果质量是否达标
+    3. 是否有明显的错误或遗漏
+
+    请以 JSON 格式返回评分：
+    {
+      "passed": true/false,
+      "score": 0-100,
+      "reason": "评分理由"
+    }
+
+  # 评分超时 (秒)
+  timeout: 60
+  # 重试次数
+  retries: 2

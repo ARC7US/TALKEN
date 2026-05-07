@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TALKEN Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 28px; margin-bottom: 8px; }
+    .subtitle { color: #94a3b8; margin-bottom: 32px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
+    @media (max-width: 768px) { .stats-grid { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 480px) { .stats-grid { grid-template-columns: 1fr; } }
+    .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); }
+    .stat-label { font-size: 13px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+    .stat-value { font-size: 32px; font-weight: 700; }
+    .stat-value.blue { color: #60a5fa; }
+    .stat-value.green { color: #4ade80; }
+    .stat-value.purple { color: #c084fc; }
+    .stat-value.yellow { color: #fbbf24; }
+    .section-title { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+    .card { background: #1e293b; border-radius: 12px; padding: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3); margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 12px 16px; font-size: 13px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #334155; }
+    td { padding: 12px 16px; border-bottom: 1px solid #1e293b; font-size: 14px; }
+    tr:hover td { background: rgba(255,255,255,0.03); }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+    .badge-published { background: rgba(96,165,250,0.2); color: #60a5fa; }
+    .badge-accepted { background: rgba(251,191,36,0.2); color: #fbbf24; }
+    .badge-submitted { background: rgba(251,146,60,0.2); color: #fb923c; }
+    .badge-aggregating { background: rgba(168,85,247,0.2); color: #a855f7; }
+    .badge-verified { background: rgba(74,222,128,0.2); color: #4ade80; }
+    .badge-settled { background: rgba(192,132,252,0.2); color: #c084fc; }
+    .badge-rejected { background: rgba(248,113,113,0.2); color: #f87171; }
+    .badge-expired { background: rgba(100,116,139,0.2); color: #94a3b8; }
+    .badge-cancelled { background: rgba(100,116,139,0.2); color: #94a3b8; }
+    .id-col { font-family: monospace; font-size: 12px; color: #94a3b8; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .skills { display: flex; gap: 4px; flex-wrap: wrap; }
+    .skill-tag { background: #334155; padding: 2px 8px; border-radius: 4px; font-size: 11px; color: #cbd5e1; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+    .status-dot.online { background: #4ade80; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .ws-status { font-size: 13px; color: #94a3b8; }
+    .ws-status .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+    .ws-status .dot.connected { background: #4ade80; }
+    .ws-status .dot.disconnected { background: #f87171; }
+    .events { max-height: 200px; overflow-y: auto; }
+    .event-item { padding: 8px 0; border-bottom: 1px solid #334155; font-size: 13px; }
+    .event-time { color: #64748b; margin-right: 8px; }
+    .event-type { color: #60a5fa; margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>TALKEN Dashboard</h1>
+        <p class="subtitle">Agent Compute Network Monitor</p>
+      </div>
+      <div class="ws-status">
+        <span class="dot" id="wsDot"></span>
+        <span id="wsLabel">Connecting...</span>
+      </div>
+    </div>
+
+    <div class="stats-grid" id="statsGrid">
+      <div class="stat-card"><div class="stat-label">Total Tasks</div><div class="stat-value blue" id="statTotal">-</div></div>
+      <div class="stat-card"><div class="stat-label">Active Tasks</div><div class="stat-value green" id="statActive">-</div></div>
+      <div class="stat-card"><div class="stat-label">Total Agents</div><div class="stat-value purple" id="statAgents">-</div></div>
+      <div class="stat-card"><div class="stat-label">Total Volume</div><div class="stat-value yellow" id="statVolume">-</div></div>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">Recent Tasks</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Skill</th><th>Level</th><th>Fee</th><th>Status</th><th>Created</th></tr></thead>
+        <tbody id="tasksBody"><tr><td colspan="6" style="color:#64748b">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">Agents</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Skills</th><th>Balance</th><th>Reputation</th><th>Stake</th></tr></thead>
+        <tbody id="agentsBody"><tr><td colspan="6" style="color:#64748b">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 class="section-title">Live Events</h2>
+      <div class="events" id="eventsList"><div class="event-item" style="color:#64748b">Waiting for events...</div></div>
+    </div>
+  </div>
+
+  <script>
+    const API_BASE = window.location.protocol + '//' + window.location.hostname + ':3001';
+    const WS_URL = 'ws://' + window.location.hostname + ':3001/ws';
+
+    function badge(status) {
+      return `<span class="badge badge-${status}">${status}</span>`;
+    }
+
+    function timeAgo(iso) {
+      const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s/60) + 'm ago';
+      if (s < 86400) return Math.floor(s/3600) + 'h ago';
+      return Math.floor(s/86400) + 'd ago';
+    }
+
+    async function fetchJSON(path) {
+      const res = await fetch(API_BASE + path);
+      const json = await res.json();
+      return json.data;
+    }
+
+    async function loadStats() {
+      try {
+        const s = await fetchJSON('/api/v1/stats');
+        document.getElementById('statTotal').textContent = s.totalTasks;
+        document.getElementById('statActive').textContent = s.activeTasks;
+        document.getElementById('statAgents').textContent = s.totalAgents;
+        document.getElementById('statVolume').textContent = s.totalVolume.toFixed(1);
+      } catch(e) { console.error('Stats error:', e); }
+    }
+
+    async function loadTasks() {
+      try {
+        const tasks = await fetchJSON('/api/v1/stats/recent?limit=15');
+        const tbody = document.getElementById('tasksBody');
+        tbody.innerHTML = tasks.map(t => `<tr>
+          <td class="id-col">${t.id}</td>
+          <td>${t.skill}</td>
+          <td>Lv.${t.level || '?'}</td>
+          <td>${t.fee}</td>
+          <td>${badge(t.status)}</td>
+          <td>${timeAgo(t.created_at)}</td>
+        </tr>`).join('');
+      } catch(e) { console.error('Tasks error:', e); }
+    }
+
+    async function loadAgents() {
+      try {
+        const agents = await fetchJSON('/api/v1/agents');
+        const tbody = document.getElementById('agentsBody');
+        tbody.innerHTML = agents.map(a => `<tr>
+          <td class="id-col">${a.id}</td>
+          <td>${a.name}</td>
+          <td><div class="skills">${(a.skills||[]).map(s => `<span class="skill-tag">${s}</span>`).join('')}</div></td>
+          <td>${(a.balance ?? 0).toFixed(1)}</td>
+          <td>${(a.reputation ?? 1).toFixed(2)}</td>
+          <td>${(a.stakeAmount ?? 0).toFixed(1)}</td>
+        </tr>`).join('');
+      } catch(e) { console.error('Agents error:', e); }
+    }
+
+    function connectWs() {
+      const dot = document.getElementById('wsDot');
+      const label = document.getElementById('wsLabel');
+      const events = document.getElementById('eventsList');
+      let firstEvent = true;
+
+      try {
+        const ws = new WebSocket(WS_URL);
+        ws.onopen = () => {
+          dot.className = 'dot connected';
+          label.textContent = 'Connected';
+          ws.send(JSON.stringify({ type: 'subscribe', channel: 'tasks' }));
+        };
+        ws.onmessage = (e) => {
+          try {
+            const msg = JSON.parse(e.data);
+            if (firstEvent) { events.innerHTML = ''; firstEvent = false; }
+            const item = document.createElement('div');
+            item.className = 'event-item';
+            item.innerHTML = `<span class="event-time">${new Date().toLocaleTimeString()}</span><span class="event-type">${msg.event || msg.channel}</span>${msg.data?.id ? msg.data.id.slice(0,20)+'...' : ''}`;
+            events.prepend(item);
+            if (events.children.length > 50) events.removeChild(events.lastChild);
+            // Refresh data on events
+            loadStats(); loadTasks(); loadAgents();
+          } catch {}
+        };
+        ws.onclose = () => {
+          dot.className = 'dot disconnected';
+          label.textContent = 'Disconnected — retrying...';
+          setTimeout(connectWs, 3000);
+        };
+        ws.onerror = () => { ws.close(); };
+      } catch {
+        dot.className = 'dot disconnected';
+        label.textContent = 'WebSocket unavailable';
+      }
+    }
+
+    // Initial load
+    loadStats(); loadTasks(); loadAgents();
+    // Auto-refresh every 5 seconds
+    setInterval(() => { loadStats(); loadTasks(); loadAgents(); }, 5000);
+    // WebSocket
+    connectWs();
+  </script>
+</body>
+</html>

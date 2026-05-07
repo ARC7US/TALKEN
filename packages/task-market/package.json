@@ -1,0 +1,29 @@
+{
+  "name": "@talken/task-market",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.0",
+    "@fastify/websocket": "^11.0.0",
+    "@iota/iota-sdk": "^1.13.0",
+    "@talken/shared": "workspace:*",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.38.0",
+    "fastify": "^5.1.0",
+    "sql.js": "^1.12.0",
+    "xstate": "^5.19.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/sql.js": "^1.4.9",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
