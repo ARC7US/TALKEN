@@ -21,6 +21,15 @@ ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
+# 交互式输入：curl | bash 模式下 stdin 是管道，必须从 /dev/tty 读
+ask() {
+    local prompt="$1"
+    local default="$2"
+    local answer
+    read -p "$prompt" answer </dev/tty 2>/dev/null || read -p "$prompt" answer
+    echo "${answer:-$default}"
+}
+
 echo ""
 echo "═══════════════════════════════════════════"
 echo "  TALKEN Validator Node - 安装程序"
@@ -66,14 +75,28 @@ if ! command -v git &>/dev/null; then
 fi
 ok "Git $(git --version | awk '{print $3}')"
 
-# pnpm
+# pnpm — 安装后必须刷新 PATH
 if ! command -v pnpm &>/dev/null; then
     info "正在安装 pnpm..."
-    npm install -g pnpm 2>/dev/null || {
-        warn "npm 全局安装失败，尝试 corepack..."
-        corepack enable
-        corepack prepare pnpm@latest --activate
-    }
+    npm install -g pnpm 2>/dev/null || true
+
+    # 刷新 PATH：npm 全局安装目录可能不在当前 PATH 中
+    NPM_GLOBAL=$(npm config get prefix 2>/dev/null)
+    export PATH="$NPM_GLOBAL/bin:$PATH"
+    hash -r  # 清除 command 缓存
+
+    # 如果还是找不到，尝试 corepack
+    if ! command -v pnpm &>/dev/null; then
+        warn "npm 全局安装 pnpm 失败，尝试 corepack..."
+        corepack enable 2>/dev/null || true
+        corepack prepare pnpm@latest --activate 2>/dev/null || true
+        hash -r
+    fi
+
+    # 最终检查
+    if ! command -v pnpm &>/dev/null; then
+        fail "pnpm 安装失败。请手动安装: npm install -g pnpm"
+    fi
 fi
 ok "pnpm $(pnpm -v)"
 
@@ -84,7 +107,7 @@ info "正在下载 TALKEN 代码..."
 
 if [ -d "$INSTALL_DIR" ]; then
     warn "目录已存在: $INSTALL_DIR"
-    read -p "是否删除并重新安装？(y/N): " confirm
+    confirm=$(ask "是否删除并重新安装？(y/N): " "n")
     if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
         rm -rf "$INSTALL_DIR"
     else
@@ -102,7 +125,7 @@ ok "代码下载完成"
 echo ""
 info "正在安装依赖..."
 cd "$INSTALL_DIR"
-pnpm install 2>&1 | tail -3
+pnpm install 2>&1 | tail -5
 ok "依赖安装完成"
 
 # ── 4. 初始化配置 ────────────────────────────────────────────
@@ -112,9 +135,10 @@ info "初始化配置文件..."
 
 cd "$INSTALL_DIR/packages/validator-node"
 
-# 如果配置文件不存在，生成一个
-if [ ! -f "validator-config.yaml" ]; then
-    cat > validator-config.yaml << 'YAML'
+CONFIG_FILE="$INSTALL_DIR/packages/validator-node/validator-config.yaml"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    cat > "$CONFIG_FILE" << 'YAML'
 # TALKEN Validator Node 配置文件
 
 node:
@@ -122,8 +146,6 @@ node:
   data_dir: "./data"
 
 network:
-  # 你的节点对外地址（公网 IP 或域名）
-  # 例如: ws://123.45.67.89:1789
   server_url: ""
   listen_port: 1789
   nat_type: "full_cone"
@@ -195,15 +217,14 @@ echo "════════════════════════�
 echo ""
 
 # 节点名称
-read -p "节点名称 [my-validator-001]: " node_name
-node_name=${node_name:-my-validator-001}
+node_name=$(ask "节点名称 [my-validator-001]: " "my-validator-001")
 
 # 公网地址
 echo ""
 echo "你的节点需要一个公网可访问的地址。"
 echo "如果有公网 IP，输入 ws://你的IP:1789"
 echo "如果没有，按回车跳过（稍后可手动配置）"
-read -p "节点地址: " server_url
+server_url=$(ask "节点地址: " "")
 
 # LLM 提供商
 echo ""
@@ -211,8 +232,7 @@ echo "选择 LLM 提供商（用于评分任务结果）:"
 echo "  1) OpenAI"
 echo "  2) Anthropic"
 echo "  3) DeepSeek"
-read -p "选择 [1]: " llm_choice
-llm_choice=${llm_choice:-1}
+llm_choice=$(ask "选择 [1]: " "1")
 
 case $llm_choice in
     1) provider="openai" ;;
@@ -223,12 +243,9 @@ esac
 
 # API Key
 echo ""
-read -p "${provider} API Key: " api_key
+api_key=$(ask "${provider} API Key: " "")
 
 # 更新配置文件
-CONFIG_FILE="$INSTALL_DIR/packages/validator-node/validator-config.yaml"
-
-# 用 sed 更新配置
 if [ -n "$node_name" ]; then
     sed -i "s/name: .*/name: \"$node_name\"/" "$CONFIG_FILE"
 fi
@@ -240,7 +257,6 @@ fi
 sed -i "s/default_provider: .*/default_provider: \"$provider\"/" "$CONFIG_FILE"
 
 if [ -n "$api_key" ]; then
-    # 更新对应 provider 的 api_key
     case $provider in
         openai)
             sed -i "/openai:/,/api_key:/ s/api_key: .*/api_key: \"$api_key\"/" "$CONFIG_FILE"
@@ -272,13 +288,13 @@ echo ""
 echo "质押 100 TALKEN 可以让你的节点被其他 Agent 自动发现。"
 echo "不质押也可以运行节点，但只能通过直接连接使用。"
 echo ""
-read -p "是否现在质押？(y/N): " do_stake
+do_stake=$(ask "是否现在质押？(y/N): " "n")
 
 if [ "$do_stake" = "y" ] || [ "$do_stake" = "Y" ]; then
     echo ""
-    read -p "钱包私钥 (0x...): " private_key
+    private_key=$(ask "钱包私钥 (0x...): " "")
     if [ -n "$private_key" ]; then
-        read -p "节点公网地址 (ws://IP:1789): " stake_url
+        stake_url=$(ask "节点公网地址 (ws://IP:1789): " "")
         if [ -n "$stake_url" ]; then
             info "正在质押..."
             TALKEN_WALLET_PRIVATE_KEY="$private_key" npx tsx src/index.ts stake --url "$stake_url" 2>&1
@@ -295,9 +311,10 @@ fi
 echo ""
 info "创建启动脚本..."
 
-cat > "$INSTALL_DIR/start.sh" << 'SCRIPT'
+cat > "$INSTALL_DIR/start.sh" << SCRIPT
 #!/usr/bin/env bash
-cd "$(dirname "$0")/packages/validator-node"
+export PATH="\$(npm config get prefix)/bin:\$PATH"
+cd "\$(dirname "\$0")/packages/validator-node"
 echo "Starting TALKEN Validator Node..."
 npx tsx src/index.ts start
 SCRIPT
@@ -316,10 +333,10 @@ ok "启动脚本已创建"
 
 echo ""
 echo "═══════════════════════════════════════════"
-echo "  安装完成！"
+echo -e "  ${GREEN}安装完成！${NC}"
 echo "═══════════════════════════════════════════"
 echo ""
-echo "  配置文件: $INSTALL_DIR/packages/validator-node/validator-config.yaml"
+echo "  配置文件: $CONFIG_FILE"
 echo ""
 echo "  启动节点:"
 echo "    $INSTALL_DIR/start.sh"
