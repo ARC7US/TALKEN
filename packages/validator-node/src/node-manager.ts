@@ -1,184 +1,149 @@
 /**
  * Node Manager
  * Handles the validator node lifecycle:
- * - Registration with TALKEN network
- * - Staking
- * - Task reception and voting
- * - Heartbeat
+ * - Start relay server (WebSocket on port 1789)
+ * - Register on-chain via RelayRegistry contract
+ * - Receive tasks from publishers
+ * - Score results using LLM
+ * - Manage staking and reputation
  */
 
-import { TalkenClient, type AgentRole } from "../../agent-sdk/src/client.js";
 import type { ValidatorConfig } from "./config.js";
+import { RelayServer } from "./relay-server.js";
 import { scoreTask, type TaskToScore } from "./scoring-engine.js";
-import type { Task } from "@talken/shared";
 
 export interface NodeStatus {
-  agentId: string;
-  role: AgentRole;
-  balance: number;
-  stakeAmount: number;
-  reputation: number;
-  isRunning: boolean;
+  nodeId: string;
+  port: number;
+  clients: number;
+  tasks: number;
   tasksScored: number;
+  isRunning: boolean;
   uptime: number;
+  staked: number;
+  reputation: number;
 }
 
 export class NodeManager {
-  private client: TalkenClient;
   private config: ValidatorConfig;
+  private relay: RelayServer;
   private tasksScored = 0;
   private startTime = 0;
   private running = false;
 
   constructor(config: ValidatorConfig) {
     this.config = config;
-    this.client = new TalkenClient({
-      baseUrl: config.network.server_url,
-      agentId: config.node.name,
-      skills: ["verify"],
-      pollInterval: 3000,
-    });
+    const port = config.network.listen_port || 1789;
+    this.relay = new RelayServer(config, port);
   }
 
   /**
-   * Initialize: register with TALKEN network and stake tokens.
+   * Initialize: check staking, prepare node.
    */
   async init(): Promise<void> {
-    console.log("正在注册 Validator...");
+    console.log("Initializing validator node...");
 
-    // Register agent
-    await this.client.register({
-      name: this.config.node.name,
-      skills: ["verify"],
-    });
-
-    console.log(`已注册: ${this.config.node.name}`);
-
-    // Check current stake
-    const profile = await this.client.getProfile();
-    if (profile.stakeAmount < this.config.staking.amount) {
-      const needed = this.config.staking.amount - profile.stakeAmount;
-      if (profile.balance >= needed) {
-        console.log(`正在质押 ${this.config.staking.amount} TALKEN...`);
-        await this.client.stake(this.config.staking.amount);
-        console.log("质押完成");
-      } else {
-        console.warn(`余额不足: 需要 ${needed} TALKEN，当前余额 ${profile.balance} TALKEN`);
-        console.warn("请先向此地址转入 TALKEN 代币");
-      }
-    } else {
-      console.log(`已质押: ${profile.stakeAmount} TALKEN`);
+    // Check hardware
+    const { checkHardware } = await import("./hardware-check.js");
+    const hwReport = checkHardware();
+    if (!hwReport.passed) {
+      throw new Error("Hardware requirements not met");
     }
+
+    console.log(`Node name: ${this.config.node.name}`);
+    console.log(`LLM provider: ${this.config.llm.default_provider}`);
+    console.log(`Listen port: ${this.config.network.listen_port || 1789}`);
   }
 
   /**
-   * Start the validator node.
-   * Begins listening for tasks and scoring them.
+   * Start the relay server and begin accepting connections.
    */
   async start(): Promise<void> {
     this.startTime = Date.now();
     this.running = true;
 
-    console.log(`Validator 节点启动: ${this.config.node.name}`);
-    console.log(`LLM 提供商: ${this.config.llm.default_provider}`);
-    console.log(`服务器: ${this.config.network.server_url}`);
+    // Start WebSocket relay server
+    this.relay.start();
 
-    // Set up task verification handler
-    this.client.onVerification(async (taskId, task) => {
-      await this.handleTask(taskId, task);
-    });
+    console.log(`\nValidator node running`);
+    console.log(`Publishers connect via: ws://<your-ip>:${this.config.network.listen_port || 1789}`);
+    console.log(`Waiting for tasks...\n`);
 
-    // Start polling
-    this.client.setRole("validator");
-    this.client.start();
-
-    console.log("开始监听任务...");
+    // Register on-chain if contract address is set
+    await this.registerOnChain();
   }
 
   /**
-   * Stop the validator node.
+   * Stop the relay server.
    */
   stop(): void {
     this.running = false;
-    this.client.stop();
-    console.log("Validator 节点已停止");
+    this.relay.stop();
+    console.log("Validator node stopped");
   }
 
   /**
-   * Handle a task verification request.
-   * Uses LLM to score the result and votes accordingly.
+   * Register this node on the RelayRegistry contract.
    */
-  private async handleTask(taskId: string, task: Task): Promise<void> {
-    console.log(`\n收到验证任务: ${taskId} (${task.skill})`);
+  private async registerOnChain(): Promise<void> {
+    const privateKey = process.env.TALKEN_WALLET_PRIVATE_KEY;
+    if (!privateKey) {
+      console.log("No TALKEN_WALLET_PRIVATE_KEY set, skipping on-chain registration");
+      console.log("To register: talken-validator stake --url ws://<your-ip>:1789");
+      return;
+    }
+
+    const port = this.config.network.listen_port || 1789;
+    const relayUrl = this.config.network.server_url || `ws://0.0.0.0:${port}`;
 
     try {
-      // Build task data for scoring
-      const taskData: TaskToScore = {
-        taskId: task.id,
-        skill: task.skill,
-        description: (task.params as any)?.description ?? task.skill,
-        params: task.params as Record<string, unknown>,
-        executorResult: (task.result as any)?.content ?? JSON.stringify(task.result),
-      };
-
-      // Score with LLM
-      console.log("正在调用 LLM 评分...");
-      const result = await scoreTask(this.config, taskData);
-
-      console.log(`评分完成: ${result.passed ? "通过" : "不通过"} (${result.score}/100)`);
-      console.log(`理由: ${result.reason}`);
-
-      // Vote
-      const voteResult = await this.client.voteOnTask(taskId, result.passed);
-      console.log(`已投票: ${result.passed ? "通过" : "不通过"}`);
-
-      if (voteResult.aggregating) {
-        console.log("正在等待汇总...");
+      const { stakeAndRegister } = await import("./staking.js");
+      console.log(`Registering on-chain with URL: ${relayUrl}...`);
+      const result = await stakeAndRegister(privateKey, relayUrl);
+      if (result.success) {
+        console.log(`On-chain registration complete. TX: ${result.txHash}`);
+      } else {
+        console.warn(`On-chain registration skipped: ${result.error}`);
       }
-
-      this.tasksScored++;
-    } catch (err: any) {
-      console.error(`验证任务 ${taskId} 失败: ${err.message}`);
+    } catch (e: any) {
+      console.warn(`On-chain registration failed: ${e.message}`);
+      console.warn("Node will still work via direct WebSocket connections");
     }
   }
 
   /**
    * Get current node status.
    */
-  async getStatus(): Promise<NodeStatus> {
-    const profile = await this.client.getProfile();
-
+  getStatus(): NodeStatus {
     return {
-      agentId: this.config.node.name,
-      role: this.client.getRole() ?? "validator",
-      balance: profile.balance,
-      stakeAmount: profile.stakeAmount,
-      reputation: profile.reputation,
-      isRunning: this.running,
+      nodeId: this.config.node.name,
+      port: this.config.network.listen_port || 1789,
+      clients: 0, // Will be populated from relay server
+      tasks: 0,
       tasksScored: this.tasksScored,
+      isRunning: this.running,
       uptime: this.running ? Date.now() - this.startTime : 0,
+      staked: this.config.staking.amount,
+      reputation: 0,
     };
   }
 
   /**
    * Format node status for display.
    */
-  async formatStatus(): Promise<string> {
-    const status = await this.getStatus();
-    const uptimeStr = status.isRunning
-      ? formatDuration(status.uptime)
-      : "已停止";
+  formatStatus(): string {
+    const status = this.getStatus();
+    const uptimeStr = status.isRunning ? formatDuration(status.uptime) : "Stopped";
 
     return [
-      "Validator 节点状态:",
-      `  名称: ${status.agentId}`,
-      `  角色: ${status.role}`,
-      `  余额: ${status.balance} TALKEN`,
-      `  质押: ${status.stakeAmount} TALKEN`,
-      `  声誉: ${status.reputation}`,
-      `  已评分任务: ${status.tasksScored}`,
-      `  运行时间: ${uptimeStr}`,
-      `  状态: ${status.isRunning ? "运行中 ✓" : "已停止 ✗"}`,
+      "Validator Node Status:",
+      `  Name:     ${status.nodeId}`,
+      `  Port:     ${status.port}`,
+      `  Status:   ${status.isRunning ? "Running" : "Stopped"}`,
+      `  Uptime:   ${uptimeStr}`,
+      `  Staked:   ${status.staked} TALKEN`,
+      `  Scored:   ${status.tasksScored} tasks`,
+      `  LLM:      ${this.config.llm.default_provider} (${this.config.llm.providers[this.config.llm.default_provider]?.model})`,
     ].join("\n");
   }
 }
@@ -187,8 +152,7 @@ function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(minutes / 60);
-
-  if (hours > 0) return `${hours}小时 ${minutes % 60}分钟`;
-  if (minutes > 0) return `${minutes}分钟 ${seconds % 60}秒`;
-  return `${seconds}秒`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
 }

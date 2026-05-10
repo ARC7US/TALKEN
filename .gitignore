@@ -3,3 +3,7 @@ dist
 *.db
 .env
 .turbo
+wallets-arbitrum.json
+out/
+cache/
+artifacts/

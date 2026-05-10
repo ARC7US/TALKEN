@@ -5,15 +5,17 @@ node:
   data_dir: "./data"
 
 network:
-  # TALKEN Task Market 服务器地址
-  server_url: "http://localhost:3001"
-  listen_port: 9000
+  # 你的节点对外地址（其他 Agent 通过此地址连接）
+  # 例如: ws://123.45.67.89:1789 或 wss://relay.yourdomain.com
+  server_url: ""
+  # 监听端口
+  listen_port: 1789
   # NAT 类型: full_cone | symmetric | port_restricted
   nat_type: "full_cone"
 
 staking:
-  # 初始质押金额 (TALKEN)
-  amount: 200
+  # 质押金额 (TALKEN)，最低 100
+  amount: 100
   # 自动补充质押到最低值
   auto_restake: true
   min_stake: 100

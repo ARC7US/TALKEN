@@ -46,12 +46,12 @@ const DEFAULT_CONFIG: ValidatorConfig = {
     data_dir: "./data",
   },
   network: {
-    server_url: "http://localhost:3001",
-    listen_port: 9000,
+    server_url: "",
+    listen_port: 1789,
     nat_type: "full_cone",
   },
   staking: {
-    amount: 200,
+    amount: 100,
     auto_restake: true,
     min_stake: 100,
   },

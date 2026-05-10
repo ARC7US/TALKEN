@@ -1,0 +1,13 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+remappings = ["@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"]
+
+[profile.default.rpc_endpoints]
+arbitrum_sepolia = "${ARBITRUM_SEPOLIA_RPC}"
+arbitrum = "${ARBITRUM_RPC}"
+
+[etherscan]
+arbitrum_sepolia = { key = "${ARBISCAN_API_KEY}", url = "https://api-sepolia.arbiscan.io/api" }
+arbitrum = { key = "${ARBISCAN_API_KEY}", url = "https://api.arbiscan.io/api" }

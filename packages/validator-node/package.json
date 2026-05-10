@@ -15,10 +15,13 @@
   "dependencies": {
     "@talken/agent-sdk": "workspace:*",
     "@talken/shared": "workspace:*",
+    "viem": "^2.48.11",
+    "ws": "^8.18.0",
     "yaml": "^2.4.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0",
     "typescript": "^5.7.0"
   }
 }

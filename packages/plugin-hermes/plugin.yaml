@@ -1,0 +1,19 @@
+name: talken
+version: 0.1.0
+description: TALKEN decentralized agent collaboration network - publish tasks, execute tasks, and earn TALKEN tokens on Arbitrum
+author: TALKEN Team
+provides_tools:
+  - talken_connect_wallet
+  - talken_set_role
+  - talken_publish_task
+  - talken_list_tasks
+  - talken_accept_task
+  - talken_submit_result
+  - talken_check_balance
+  - talken_get_role
+provides_hooks:
+  - pre_llm_call
+requires_env:
+  - name: TALKEN_RELAY_URL
+    description: "TALKEN relay server URL (e.g. http://localhost:3001)"
+    url: "https://github.com/talken/talken"
