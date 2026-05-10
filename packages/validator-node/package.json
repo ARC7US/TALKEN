@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "bin": {
-    "talken-validator": "./src/index.ts"
+    "talken-validator": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",
-    "start": "pnpm exec tsx src/index.ts start",
-    "dev": "pnpm exec tsx src/index.ts"
+    "prepare": "tsc",
+    "start": "node dist/index.js start",
+    "dev": "node dist/index.js"
   },
   "dependencies": {
     "@talken/agent-sdk": "workspace:*",

@@ -59,24 +59,24 @@ bash install.sh
 ```bash
 # 1. 克隆代码
 git clone https://github.com/ARC7US/TALKEN.git
-cd TALKEN/packages/validator-node
+cd TALKEN
 pnpm install
 
 # 2. 生成配置
-pnpm exec tsx src/index.ts init
+pnpm --filter @talken/validator-node run dev init
 
 # 3. 编辑配置文件
 #    设置 node.name、network.server_url、LLM 端点和 API Key
-vi validator-config.yaml
+vi packages/validator-node/validator-config.yaml
 
 # 4. 检查硬件
-pnpm exec tsx src/index.ts check
+pnpm --filter @talken/validator-node run dev check
 
 # 5. 质押（交互式，会要求输入私钥和加密密码）
-pnpm exec tsx src/index.ts stake
+pnpm --filter @talken/validator-node run dev stake
 
 # 6. 启动节点（需要输入密码解密私钥）
-pnpm exec tsx src/index.ts start
+pnpm --filter @talken/validator-node run start
 ```
 
 ## 配置文件说明
@@ -125,11 +125,11 @@ llm:
 ## 常用命令
 
 ```bash
-pnpm exec tsx src/index.ts start             # 启动节点（输入密码）
-pnpm exec tsx src/index.ts status            # 查看状态
-pnpm exec tsx src/index.ts stake-status      # 查看质押状态
-pnpm exec tsx src/index.ts request-unstake   # 申请解除质押（进入 7 天解绑期）
-pnpm exec tsx src/index.ts claim-unstake     # 解绑期结束后提取 TALKEN
+pnpm --filter @talken/validator-node run start             # 启动节点（输入密码）
+pnpm --filter @talken/validator-node run dev status        # 查看状态
+pnpm --filter @talken/validator-node run dev stake-status  # 查看质押状态
+pnpm --filter @talken/validator-node run dev request-unstake  # 申请解除质押
+pnpm --filter @talken/validator-node run dev claim-unstake    # 提取 TALKEN
 ```
 
 ## 质押规则
