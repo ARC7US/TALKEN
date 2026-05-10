@@ -430,11 +430,11 @@ info "正在质押并注册节点..."
 # 调用 Node.js 脚本完成质押
 TALKEN_WALLET_PRIVATE_KEY="$private_key" TALKEN_KEY_PASSWORD="$key_password" \
     npx tsx -e "
-const { encryptKey } = require('./src/keyring.ts');
-const { stakeAndRegister } = require('./src/staking.ts');
-const { loadConfig } = require('./src/config.ts');
-
 async function main() {
+    const { encryptKey } = await import('./src/keyring.ts');
+    const { stakeAndRegister } = await import('./src/staking.ts');
+    const { loadConfig } = await import('./src/config.ts');
+
     const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
     const pw = process.env.TALKEN_KEY_PASSWORD;
 
