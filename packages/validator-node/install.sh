@@ -29,21 +29,28 @@ ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
+# 确定输入源：优先 /dev/tty，否则用 stdin
+if [ -e /dev/tty ]; then
+    TTY="/dev/tty"
+else
+    TTY="/dev/stdin"
+fi
+
 ask() {
     local prompt="$1"
     local default="$2"
     local answer
-    echo -n "$prompt"
-    read -r answer
+    printf "%s" "$prompt" >"$TTY"
+    read -r answer <"$TTY"
     echo "${answer:-$default}"
 }
 
 ask_secret() {
     local prompt="$1"
     local answer
-    echo -n "$prompt"
-    read -rs answer
-    echo "" >&2
+    printf "%s" "$prompt" >"$TTY"
+    read -rs answer <"$TTY"
+    echo "" >"$TTY"
     echo "$answer"
 }
 
@@ -399,9 +406,6 @@ echo "  运营节点需要质押 100 TALKEN 到链上合约。"
 echo "  质押后你的节点会被其他 Agent 自动发现。"
 echo "  解除质押时 TALKEN 会全额退还。"
 echo ""
-echo "  钱包私钥将使用 AES-256 加密后存储在 ~/.talken/key.enc"
-echo "  启动节点时需要输入密码解密。"
-echo ""
 
 while true; do
     private_key=$(ask_secret "  钱包私钥 (0x...): ")
@@ -411,43 +415,23 @@ while true; do
     warn "私钥不能为空，请重新输入。"
 done
 
-while true; do
-    key_password=$(ask_secret "  设置加密密码: ")
-    if [ ${#key_password} -lt 6 ]; then
-        warn "密码至少 6 位，请重新设置。"
-        continue
-    fi
-    key_password2=$(ask_secret "  确认加密密码: ")
-    if [ "$key_password" = "$key_password2" ]; then
-        break
-    fi
-    warn "两次密码不一致，请重新设置。"
-done
-
 echo ""
 info "正在质押并注册节点..."
 
+# 获取配置中的端口
+PORT_VAL=$(grep 'listen_port' "$CONFIG_FILE" | grep -o '[0-9]*' || echo "1789")
+SERVER_URL_VAL=$(grep 'server_url' "$CONFIG_FILE" | sed 's/.*: *"\(.*\)".*/\1/')
+RELAY_URL="${SERVER_URL_VAL:-ws://0.0.0.0:$PORT_VAL}"
+
 # 调用 Node.js 脚本完成质押
-TALKEN_WALLET_PRIVATE_KEY="$private_key" TALKEN_KEY_PASSWORD="$key_password" \
+TALKEN_WALLET_PRIVATE_KEY="$private_key" \
     npx tsx -e "
 async function main() {
-    const { encryptKey } = await import('./src/keyring.ts');
     const { stakeAndRegister } = await import('./src/staking.ts');
-    const { loadConfig } = await import('./src/config.ts');
 
     const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
-    const pw = process.env.TALKEN_KEY_PASSWORD;
+    const url = '$RELAY_URL';
 
-    // 加密存储私钥
-    encryptKey(pk, pw);
-    console.log('私钥已加密存储。');
-
-    // 获取配置中的端口
-    const config = loadConfig();
-    const port = config.network.listen_port || 1789;
-    const url = config.network.server_url || 'ws://0.0.0.0:' + port;
-
-    // 质押
     const result = await stakeAndRegister(pk, url);
     if (result.success) {
         console.log('质押成功! TX: ' + result.txHash);
@@ -455,6 +439,33 @@ async function main() {
         console.error('质押失败: ' + result.error);
         process.exit(1);
     }
+}
+main().catch(e => { console.error(e.message); process.exit(1); });
+" 2>&1
+
+# 质押成功后，加密存储私钥
+echo ""
+info "正在加密存储私钥..."
+
+while true; do
+    key_password=$(ask_secret "  设置加密密码（启动节点时需要）: ")
+    if [ ${#key_password} -lt 6 ]; then
+        warn "密码至少 6 位，请重新设置。"
+        continue
+    fi
+    key_password2=$(ask_secret "  确认密码: ")
+    if [ "$key_password" = "$key_password2" ]; then
+        break
+    fi
+    warn "两次密码不一致，请重新设置。"
+done
+
+TALKEN_WALLET_PRIVATE_KEY="$private_key" TALKEN_KEY_PASSWORD="$key_password" \
+    npx tsx -e "
+async function main() {
+    const { encryptKey } = await import('./src/keyring.ts');
+    encryptKey(process.env.TALKEN_WALLET_PRIVATE_KEY, process.env.TALKEN_KEY_PASSWORD);
+    console.log('私钥已加密存储在 ~/.talken/key.enc');
 }
 main().catch(e => { console.error(e.message); process.exit(1); });
 " 2>&1
