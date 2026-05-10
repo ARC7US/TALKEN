@@ -131,6 +131,7 @@ if [ -d "$INSTALL_DIR" ]; then
     warn "目录已存在: $INSTALL_DIR"
     confirm=$(ask "是否删除并重新安装？(y/N): " "n")
     if [ "$confirm" = "y" ] || [ "$confirm" = "Y" ]; then
+        cd "$HOME"
         rm -rf "$INSTALL_DIR"
     else
         info "跳过下载，使用已有目录"
