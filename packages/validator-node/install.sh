@@ -406,6 +406,8 @@ echo "  运营节点需要质押 100 TALKEN 到链上合约。"
 echo "  质押后你的节点会被其他 Agent 自动发现。"
 echo "  解除质押时 TALKEN 会全额退还。"
 echo ""
+echo "  注意：钱包需要少量 ETH 支付 Gas 费（约 \$0.01）"
+echo ""
 
 while true; do
     private_key=$(ask_secret "  钱包私钥 (0x...): ")
@@ -458,16 +460,19 @@ fi
 echo ""
 info "创建启动脚本..."
 
+PNPM_PATH="$(which pnpm)"
+
 cat > "$INSTALL_DIR/start.sh" << SCRIPT
 #!/usr/bin/env bash
 cd "\$(dirname "\$0")"
+export PATH="$(dirname "$PNPM_PATH"):\$PATH"
 echo "Starting TALKEN Validator Node..."
 echo "请输入密钥密码以启动节点："
-pnpm --filter @talken/validator-node run start
+"$PNPM_PATH" --filter @talken/validator-node run start
 SCRIPT
 chmod +x "$INSTALL_DIR/start.sh"
 
-cat > "$INSTALL_DIR/start.cmd" << 'SCRIPT'
+cat > "$INSTALL_DIR/start.cmd" << SCRIPT
 @echo off
 cd /d "%~dp0"
 echo Starting TALKEN Validator Node...

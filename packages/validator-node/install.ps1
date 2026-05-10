@@ -133,25 +133,13 @@ staking:
   min_stake: 100
 
 llm:
-  default_provider: "openai"
-
+  default_provider: "custom"
   providers:
-    openai:
-      base_url: "https://api.openai.com/v1"
+    custom:
+      protocol: "openai"
+      base_url: ""
       api_key: ""
-      model: "gpt-4o"
-      max_tokens: 4096
-
-    anthropic:
-      base_url: "https://api.anthropic.com"
-      api_key: ""
-      model: "claude-sonnet-4-20250514"
-      max_tokens: 4096
-
-    deepseek:
-      base_url: "https://api.deepseek.com/v1"
-      api_key: ""
-      model: "deepseek-chat"
+      model: ""
       max_tokens: 4096
 
 scoring:
@@ -189,103 +177,220 @@ Ok "配置文件已生成"
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  配置向导"
+Write-Host "  节点配置"
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
 
-$nodeName = Read-Host "节点名称 [my-validator-001]"
+$nodeName = Read-Host "  节点名称 [my-validator-001]"
 if (-not $nodeName) { $nodeName = "my-validator-001" }
 
 Write-Host ""
-Write-Host "你的节点需要一个公网可访问的地址。"
-Write-Host "如果有公网 IP，输入 ws://你的IP:1789"
-Write-Host "如果没有，按回车跳过"
-$serverUrl = Read-Host "节点地址"
+Write-Host "  你的节点需要一个公网可访问的地址。"
+Write-Host "  如果有公网 IP，输入 ws://你的IP:1789"
+Write-Host "  如果没有，按回车跳过（稍后可手动配置）"
+$serverUrl = Read-Host "  节点地址"
+
+# ── 5a. LLM 配置 ─────────────────────────────────────────────
 
 Write-Host ""
-Write-Host "选择 LLM 提供商（用于评分任务结果）:"
-Write-Host "  1) OpenAI"
-Write-Host "  2) Anthropic"
-Write-Host "  3) DeepSeek"
-$llmChoice = Read-Host "选择 [1]"
-if (-not $llmChoice) { $llmChoice = "1" }
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host "  LLM 配置（用于评分任务结果）"
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  选择 API 协议:"
+Write-Host "    1) OpenAI 兼容协议（OpenAI / DeepSeek / vLLM / Ollama 等）"
+Write-Host "    2) Anthropic 协议（Claude）"
+$protocolChoice = Read-Host "  选择 [1]"
+if (-not $protocolChoice) { $protocolChoice = "1" }
 
-switch ($llmChoice) {
-    "1" { $provider = "openai" }
-    "2" { $provider = "anthropic" }
-    "3" { $provider = "deepseek" }
-    default { $provider = "openai" }
+switch ($protocolChoice) {
+    "1" { $protocol = "openai" }
+    "2" { $protocol = "anthropic" }
+    default { $protocol = "openai" }
 }
 
 Write-Host ""
-$apiKey = Read-Host "$provider API Key"
+if ($protocol -eq "openai") {
+    Write-Host "  输入 LLM 端点地址:"
+    Write-Host "  例如: https://api.openai.com/v1"
+    Write-Host "        https://api.deepseek.com/v1"
+    Write-Host "        http://localhost:11434/v1 (Ollama)"
+} else {
+    Write-Host "  输入 LLM 端点地址:"
+    Write-Host "  例如: https://api.anthropic.com"
+}
+$llmBaseUrl = Read-Host "  端点"
+$llmBaseUrl = $llmBaseUrl.TrimEnd("/")
 
-# 更新配置文件
+Write-Host ""
+$apiKey = Read-Host "  API Key"
+
+# 自动检测模型
+Write-Host ""
+Info "正在检测可用模型..."
+
+$detectedModel = ""
+
+if ($protocol -eq "openai") {
+    try {
+        $headers = @{ "Authorization" = "Bearer $apiKey" }
+        $modelsResponse = Invoke-RestMethod -Uri "$llmBaseUrl/models" -Headers $headers -TimeoutSec 10 -ErrorAction Stop
+        $models = $modelsResponse.data
+        if ($models) {
+            $preferred = $models | Where-Object { $_.id -match "gpt-4|claude|deepseek|qwen|llama" } | Select-Object -First 1
+            if ($preferred) {
+                $detectedModel = $preferred.id
+            } else {
+                $detectedModel = $models[0].id
+            }
+        }
+    } catch {
+        # 检测失败，手动输入
+    }
+} elseif ($protocol -eq "anthropic") {
+    try {
+        $headers = @{
+            "x-api-key" = $apiKey
+            "anthropic-version" = "2023-06-01"
+            "Content-Type" = "application/json"
+        }
+        $body = '{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}'
+        $testResponse = Invoke-RestMethod -Uri "$llmBaseUrl/v1/messages" -Method Post -Headers $headers -Body $body -TimeoutSec 10 -ErrorAction Stop
+        if ($testResponse.content) {
+            $detectedModel = "claude-sonnet-4-20250514"
+        }
+    } catch {
+        # 检测失败，手动输入
+    }
+}
+
+if ($detectedModel) {
+    Ok "检测到模型: $detectedModel"
+    $useDetected = Read-Host "  使用该模型？(Y/n)"
+    if ($useDetected -eq "n" -or $useDetected -eq "N") {
+        $detectedModel = ""
+    }
+}
+
+if (-not $detectedModel) {
+    if ($protocol -eq "openai") {
+        Write-Host "  未能自动检测，请手动输入模型名称。"
+        Write-Host "  例如: gpt-4o, deepseek-chat, qwen-plus, llama3"
+    } else {
+        Write-Host "  请输入模型名称。"
+        Write-Host "  例如: claude-sonnet-4-20250514, claude-haiku-4-5-20251001"
+    }
+    $detectedModel = Read-Host "  模型名称"
+}
+
+if (-not $detectedModel) {
+    Fail "模型名称不能为空。"
+}
+
+# 写入配置
 $content = Get-Content $configFile -Raw
 $content = $content -replace 'name: ".*"', "name: `"$nodeName`""
 if ($serverUrl) {
     $content = $content -replace 'server_url: ".*"', "server_url: `"$serverUrl`""
 }
-$content = $content -replace 'default_provider: ".*"', "default_provider: `"$provider`""
+$content = $content -replace 'default_provider: ".*"', 'default_provider: "custom"'
 
-if ($apiKey) {
-    # 更新对应 provider 的 api_key
-    $inProvider = $false
-    $lines = $content -split "`n"
-    for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match "^\s+$provider:") { $inProvider = $true }
-        if ($inProvider -and $lines[$i] -match 'api_key:') {
-            $lines[$i] = $lines[$i] -replace 'api_key: ".*"', "api_key: `"$apiKey`""
-            $inProvider = $false
-        }
-    }
-    $content = $lines -join "`n"
-}
+# 替换 providers 块
+$providersBlock = @"
+  providers:
+    custom:
+      protocol: "$protocol"
+      base_url: "$llmBaseUrl"
+      api_key: "$apiKey"
+      model: "$detectedModel"
+      max_tokens: 4096
+"@
+
+$content = [regex]::Replace($content, '  providers:\n(?:    \w+:\n(?:      .*\n)*)*', $providersBlock + "`n")
 
 $content | Out-File -FilePath $configFile -Encoding utf8
-Ok "配置已保存"
+Ok "LLM 配置已保存: $protocol / $detectedModel"
 
-# ── 6. 硬件检查 ──────────────────────────────────────────────
+# ── 5b. 硬件检查 ─────────────────────────────────────────────
 
 Write-Host ""
 Info "检查硬件..."
 try {
-    npx tsx src/index.ts check 2>&1
+    node "$INSTALL_DIR\packages\validator-node\scripts\check-hardware.mjs" 2>&1
 } catch {
     Warn "硬件检查未通过，节点可能运行不稳定"
 }
 
-# ── 7. 质押（可选） ──────────────────────────────────────────
+# ── 6. 质押（必须） ──────────────────────────────────────────
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "  质押 TALKEN（可选）"
+Write-Host "  质押 TALKEN（必须）"
 Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "质押 100 TALKEN 可以让你的节点被其他 Agent 自动发现。"
-Write-Host "不质押也可以运行节点，但只能通过直接连接使用。"
+Write-Host "  运营节点需要质押 100 TALKEN 到链上合约。"
+Write-Host "  质押后你的节点会被其他 Agent 自动发现。"
+Write-Host "  解除质押时 TALKEN 会全额退还。"
 Write-Host ""
-$doStake = Read-Host "是否现在质押？(y/N)"
+Write-Host "  注意：钱包需要少量 ETH 支付 Gas 费（约 `$0.01）" -ForegroundColor Yellow
+Write-Host ""
 
-if ($doStake -eq "y" -or $doStake -eq "Y") {
-    Write-Host ""
-    $privateKey = Read-Host "钱包私钥 (0x...)"
-    if ($privateKey) {
-        $stakeUrl = Read-Host "节点公网地址 (ws://IP:1789)"
-        if ($stakeUrl) {
-            Info "正在质押..."
-            $env:TALKEN_WALLET_PRIVATE_KEY = $privateKey
-            npx tsx src/index.ts stake --url $stakeUrl
-            Remove-Item Env:\TALKEN_WALLET_PRIVATE_KEY
-        } else {
-            Warn "未输入地址，跳过质押"
-        }
-    } else {
-        Warn "未输入私钥，跳过质押"
+do {
+    $privateKey = Read-Host "  钱包私钥 (0x...)"
+    if (-not $privateKey) {
+        Warn "私钥不能为空，请重新输入。"
     }
+} while (-not $privateKey)
+
+Write-Host ""
+Info "正在质押并注册节点..."
+
+# 获取配置中的端口
+$portMatch = Select-String -Path $configFile -Pattern 'listen_port' | ForEach-Object { if ($_ -match '(\d+)') { $matches[1] } }
+if (-not $portMatch) { $portMatch = "1789" }
+
+$serverUrlMatch = ""
+if ($serverUrl) {
+    $serverUrlMatch = $serverUrl
+}
+if (-not $serverUrlMatch) {
+    $serverUrlMatch = "ws://0.0.0.0:$portMatch"
 }
 
-# ── 8. 创建启动脚本 ──────────────────────────────────────────
+$env:TALKEN_WALLET_PRIVATE_KEY = $privateKey
+node "$INSTALL_DIR\packages\validator-node\scripts\stake.mjs" $serverUrlMatch 2>&1
+$stakeExit = $LASTEXITCODE
+
+# 质押成功后，加密存储私钥
+if ($stakeExit -eq 0) {
+    Write-Host ""
+    Info "正在加密存储私钥..."
+
+    do {
+        $keyPassword = Read-Host "  设置加密密码（启动节点时需要）" -AsSecureString
+        $keyPasswordPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($keyPassword))
+        if ($keyPasswordPlain.Length -lt 6) {
+            Warn "密码至少 6 位，请重新设置。"
+            continue
+        }
+        $keyPassword2 = Read-Host "  确认密码" -AsSecureString
+        $keyPassword2Plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($keyPassword2))
+        if ($keyPasswordPlain -eq $keyPassword2Plain) {
+            break
+        }
+        Warn "两次密码不一致，请重新设置。"
+    } while ($true)
+
+    $env:TALKEN_KEY_PASSWORD = $keyPasswordPlain
+    node "$INSTALL_DIR\packages\validator-node\scripts\encrypt-key.mjs" 2>&1
+    Remove-Item Env:\TALKEN_KEY_PASSWORD
+} else {
+    Warn "质押失败，跳过密钥加密存储。"
+}
+
+Remove-Item Env:\TALKEN_WALLET_PRIVATE_KEY
+
+# ── 7. 创建启动脚本 ──────────────────────────────────────────
 
 Write-Host ""
 Info "创建启动脚本..."
@@ -294,7 +399,8 @@ Info "创建启动脚本..."
 @echo off
 cd /d "$validatorDir"
 echo Starting TALKEN Validator Node...
-npx tsx src/index.ts start
+echo 请输入密钥密码以启动节点：
+pnpm --filter @talken/validator-node run start
 "@ | Out-File -FilePath "$INSTALL_DIR\start.cmd" -Encoding ascii
 
 Ok "启动脚本已创建"
@@ -307,18 +413,15 @@ Write-Host "  安装完成！"
 Write-Host "==========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  配置文件: $validatorDir\validator-config.yaml"
+Write-Host "  加密密钥: $env:USERPROFILE\.talken\key.enc"
 Write-Host ""
-Write-Host "  启动节点:" -ForegroundColor Cyan
+Write-Host "  启动节点（需要输入密码）:" -ForegroundColor Cyan
 Write-Host "    $INSTALL_DIR\start.cmd"
 Write-Host ""
-Write-Host "  或手动启动:" -ForegroundColor Cyan
-Write-Host "    cd $validatorDir"
-Write-Host "    npx tsx src/index.ts start"
-Write-Host ""
-Write-Host "  常用命令:" -ForegroundColor Cyan
-Write-Host "    npx tsx src/index.ts status       # 查看状态"
-Write-Host "    npx tsx src/index.ts stake-status  # 查看质押状态"
-Write-Host "    npx tsx src/index.ts unstake       # 解除质押"
+Write-Host "  常用命令（在 $INSTALL_DIR 目录下运行）:" -ForegroundColor Cyan
+Write-Host "    pnpm --filter @talken/validator-node exec tsx src/index.ts status"
+Write-Host "    pnpm --filter @talken/validator-node exec tsx src/index.ts stake-status"
+Write-Host "    pnpm --filter @talken/validator-node exec tsx src/index.ts unstake"
 Write-Host ""
 Write-Host "  更多信息: $validatorDir\SETUP.md"
 Write-Host ""

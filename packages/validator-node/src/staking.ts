@@ -97,7 +97,17 @@ export async function stakeAndRegister(
   console.log(`钱包地址: ${account.address}`);
   console.log(`中继地址: ${relayUrl}`);
 
-  // 1. Check TALKEN balance
+  // 1. Check ETH for gas
+  const ethBalance = await publicClient.getBalance({ address: account.address });
+  console.log(`ETH 余额 (Gas): ${formatEther(ethBalance)} ETH`);
+  if (ethBalance === 0n) {
+    return {
+      success: false,
+      error: "钱包没有 ETH，无法支付 Gas 费。请向 Arbitrum 钱包转入少量 ETH（约 $0.01 即可）。",
+    };
+  }
+
+  // 2. Check TALKEN balance
   const balance = await publicClient.readContract({
     address: TALKEN_TOKEN,
     abi: ERC20_ABI,

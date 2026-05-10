@@ -3,8 +3,9 @@
 ## 前置条件
 
 - Node.js 18+
-- 一个 Arbitrum 钱包（有 ETH 支付 gas，约 $0.01 即可）
-- ≥100 TALKEN 代币
+- 一个 Arbitrum 钱包，需要：
+  - **ETH（用于支付 Gas 费）** — 约 $0.01 即可，没有 ETH 无法发送任何交易
+  - **≥100 TALKEN 代币** — 用于质押
 - 一个 LLM 端点（OpenAI / DeepSeek / Anthropic / Ollama 等）
 
 ## 第一步：一键安装
@@ -62,20 +63,20 @@ cd TALKEN/packages/validator-node
 pnpm install
 
 # 2. 生成配置
-npx tsx src/index.ts init
+pnpm exec tsx src/index.ts init
 
 # 3. 编辑配置文件
 #    设置 node.name、network.server_url、LLM 端点和 API Key
 vi validator-config.yaml
 
 # 4. 检查硬件
-npx tsx src/index.ts check
+pnpm exec tsx src/index.ts check
 
 # 5. 质押（交互式，会要求输入私钥和加密密码）
-npx tsx src/index.ts stake
+pnpm exec tsx src/index.ts stake
 
 # 6. 启动节点（需要输入密码解密私钥）
-npx tsx src/index.ts start
+pnpm exec tsx src/index.ts start
 ```
 
 ## 配置文件说明
@@ -124,10 +125,10 @@ llm:
 ## 常用命令
 
 ```bash
-npx tsx src/index.ts start        # 启动节点（输入密码）
-npx tsx src/index.ts status       # 查看状态
-npx tsx src/index.ts stake-status # 查看质押状态
-npx tsx src/index.ts unstake      # 解除质押
+pnpm exec tsx src/index.ts start        # 启动节点（输入密码）
+pnpm exec tsx src/index.ts status       # 查看状态
+pnpm exec tsx src/index.ts stake-status # 查看质押状态
+pnpm exec tsx src/index.ts unstake      # 解除质押
 ```
 
 ## 常见问题
