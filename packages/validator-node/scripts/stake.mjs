@@ -20,8 +20,7 @@ const ERC20_ABI = [
 
 const REGISTRY_ABI = [
   { name: "register", type: "function", stateMutability: "nonpayable", inputs: [{ name: "url", type: "string" }], outputs: [] },
-  { name: "isStaked", type: "function", stateMutability: "view", inputs: [{ name: "operator", type: "address" }], outputs: [{ name: "", type: "bool" }] },
-  { name: "stakes", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ type: "tuple", components: [{ name: "active", type: "bool" }, { name: "stakedAt", type: "uint256" }, { name: "unstakeAfter", type: "uint256" }] }] },
+  { name: "staked", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "bool" }] },
 ];
 
 const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
@@ -62,7 +61,7 @@ if (balance < STAKE_AMOUNT) {
 }
 
 // 3. Check if already staked
-const alreadyStaked = await publicClient.readContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "isStaked", args: [account.address] });
+const alreadyStaked = await publicClient.readContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "staked", args: [account.address] });
 if (alreadyStaked) {
   console.log("该地址已经质押并注册过了。");
   process.exit(0);

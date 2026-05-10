@@ -55,6 +55,13 @@ const REGISTRY_ABI = [
     outputs: [],
   },
   {
+    name: "staked",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "address" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
     name: "requestUnstake",
     type: "function",
     stateMutability: "nonpayable",
@@ -112,6 +119,13 @@ const REGISTRY_ABI = [
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
   },
+  {
+    name: "unregister",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
 ] as const;
 
 export interface StakeResult {
@@ -166,7 +180,7 @@ export async function stakeAndRegister(
   const alreadyStaked = await publicClient.readContract({
     address: RELAY_REGISTRY,
     abi: REGISTRY_ABI,
-    functionName: "isStaked",
+    functionName: "staked",
     args: [account.address],
   });
   if (alreadyStaked) {
