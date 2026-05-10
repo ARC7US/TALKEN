@@ -9,9 +9,23 @@
 
 ## 第一步：安装
 
+### 方式一：一键安装（推荐）
+
 ```bash
-git clone <repo-url>
-cd packages/validator-node
+# 下载安装脚本
+curl -fsSL https://raw.githubusercontent.com/ARC7US/TALKEN/master/packages/validator-node/install.sh -o install.sh
+
+# 运行
+bash install.sh
+```
+
+脚本会自动：检查依赖 → 克隆代码 → 安装依赖 → 交互式配置 → 硬件检查 → 可选质押
+
+### 方式二：手动安装
+
+```bash
+git clone https://github.com/ARC7US/TALKEN.git
+cd TALKEN/packages/validator-node
 pnpm install
 ```
 
