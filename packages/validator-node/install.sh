@@ -1,10 +1,24 @@
 #!/usr/bin/env bash
-set -e
 
 # ─────────────────────────────────────────────────────────────
 # TALKEN Validator Node - 一键安装脚本
-# 用法: curl -fsSL https://raw.githubusercontent.com/ARC7US/TALKEN/master/packages/validator-node/install.sh | bash
+#
+# 用法（两种方式任选）:
+#   方式一（推荐）:
+#     curl -fsSL https://raw.githubusercontent.com/ARC7US/TALKEN/master/packages/validator-node/install.sh -o install.sh
+#     bash install.sh
+#
+#   方式二:
+#     curl -fsSL https://raw.githubusercontent.com/ARC7US/TALKEN/master/packages/validator-node/install.sh | bash
 # ─────────────────────────────────────────────────────────────
+
+# 关键：如果通过管道执行（curl | bash），stdin 不是终端，所有 read 都会失败。
+# 这里检测并用 /dev/tty 重新执行脚本，让 stdin 指向真正的终端。
+if [ ! -t 0 ] && [ -e /dev/tty ]; then
+    exec bash "$0" </dev/tty
+fi
+
+set -e
 
 REPO="https://github.com/ARC7US/TALKEN.git"
 INSTALL_DIR="$HOME/talken-validator"
@@ -21,12 +35,13 @@ ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
-# 交互式输入：curl | bash 模式下 stdin 是管道，必须从 /dev/tty 读
+# 安全的交互式输入函数
 ask() {
     local prompt="$1"
     local default="$2"
     local answer
-    read -p "$prompt" answer </dev/tty 2>/dev/null || read -p "$prompt" answer
+    echo -n "$prompt"
+    read -r answer
     echo "${answer:-$default}"
 }
 
@@ -75,17 +90,16 @@ if ! command -v git &>/dev/null; then
 fi
 ok "Git $(git --version | awk '{print $3}')"
 
-# pnpm — 安装后必须刷新 PATH
+# pnpm
 if ! command -v pnpm &>/dev/null; then
     info "正在安装 pnpm..."
     npm install -g pnpm 2>/dev/null || true
 
-    # 刷新 PATH：npm 全局安装目录可能不在当前 PATH 中
+    # 刷新 PATH
     NPM_GLOBAL=$(npm config get prefix 2>/dev/null)
     export PATH="$NPM_GLOBAL/bin:$PATH"
-    hash -r  # 清除 command 缓存
+    hash -r
 
-    # 如果还是找不到，尝试 corepack
     if ! command -v pnpm &>/dev/null; then
         warn "npm 全局安装 pnpm 失败，尝试 corepack..."
         corepack enable 2>/dev/null || true
@@ -93,7 +107,6 @@ if ! command -v pnpm &>/dev/null; then
         hash -r
     fi
 
-    # 最终检查
     if ! command -v pnpm &>/dev/null; then
         fail "pnpm 安装失败。请手动安装: npm install -g pnpm"
     fi
@@ -217,22 +230,22 @@ echo "════════════════════════�
 echo ""
 
 # 节点名称
-node_name=$(ask "节点名称 [my-validator-001]: " "my-validator-001")
+node_name=$(ask "  节点名称 [my-validator-001]: " "my-validator-001")
 
 # 公网地址
 echo ""
-echo "你的节点需要一个公网可访问的地址。"
-echo "如果有公网 IP，输入 ws://你的IP:1789"
-echo "如果没有，按回车跳过（稍后可手动配置）"
-server_url=$(ask "节点地址: " "")
+echo "  你的节点需要一个公网可访问的地址。"
+echo "  如果有公网 IP，输入 ws://你的IP:1789"
+echo "  如果没有，按回车跳过（稍后可手动配置）"
+server_url=$(ask "  节点地址: " "")
 
 # LLM 提供商
 echo ""
-echo "选择 LLM 提供商（用于评分任务结果）:"
-echo "  1) OpenAI"
-echo "  2) Anthropic"
-echo "  3) DeepSeek"
-llm_choice=$(ask "选择 [1]: " "1")
+echo "  选择 LLM 提供商（用于评分任务结果）:"
+echo "    1) OpenAI"
+echo "    2) Anthropic"
+echo "    3) DeepSeek"
+llm_choice=$(ask "  选择 [1]: " "1")
 
 case $llm_choice in
     1) provider="openai" ;;
@@ -243,7 +256,7 @@ esac
 
 # API Key
 echo ""
-api_key=$(ask "${provider} API Key: " "")
+api_key=$(ask "  ${provider} API Key: " "")
 
 # 更新配置文件
 if [ -n "$node_name" ]; then
@@ -285,16 +298,16 @@ echo "════════════════════════�
 echo "  质押 TALKEN（可选）"
 echo "═══════════════════════════════════════════"
 echo ""
-echo "质押 100 TALKEN 可以让你的节点被其他 Agent 自动发现。"
-echo "不质押也可以运行节点，但只能通过直接连接使用。"
+echo "  质押 100 TALKEN 可以让你的节点被其他 Agent 自动发现。"
+echo "  不质押也可以运行节点，但只能通过直接连接使用。"
 echo ""
-do_stake=$(ask "是否现在质押？(y/N): " "n")
+do_stake=$(ask "  是否现在质押？(y/N): " "n")
 
 if [ "$do_stake" = "y" ] || [ "$do_stake" = "Y" ]; then
     echo ""
-    private_key=$(ask "钱包私钥 (0x...): " "")
+    private_key=$(ask "  钱包私钥 (0x...): " "")
     if [ -n "$private_key" ]; then
-        stake_url=$(ask "节点公网地址 (ws://IP:1789): " "")
+        stake_url=$(ask "  节点公网地址 (ws://IP:1789): " "")
         if [ -n "$stake_url" ]; then
             info "正在质押..."
             TALKEN_WALLET_PRIVATE_KEY="$private_key" npx tsx src/index.ts stake --url "$stake_url" 2>&1
