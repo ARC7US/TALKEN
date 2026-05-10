@@ -86,10 +86,11 @@ async function callAnthropic(config: LLMProviderConfig, prompt: string): Promise
 
 /**
  * Call LLM based on provider type.
- * Auto-detects Anthropic vs OpenAI-compatible based on base_url.
+ * Uses explicit `protocol` field if set, otherwise auto-detects from base_url.
  */
 export async function callLLM(config: LLMProviderConfig, prompt: string): Promise<LLMResponse> {
-  const isAnthropic = config.base_url.includes("anthropic") || config.base_url.includes("claude");
+  const isAnthropic = config.protocol === "anthropic"
+    || (!config.protocol && (config.base_url.includes("anthropic") || config.base_url.includes("claude")));
 
   if (isAnthropic) {
     return callAnthropic(config, prompt);

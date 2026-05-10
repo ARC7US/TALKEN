@@ -7,6 +7,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 
 export interface LLMProviderConfig {
+  protocol?: "openai" | "anthropic";
   base_url: string;
   api_key: string;
   model: string;
@@ -56,24 +57,13 @@ const DEFAULT_CONFIG: ValidatorConfig = {
     min_stake: 100,
   },
   llm: {
-    default_provider: "openai",
+    default_provider: "custom",
     providers: {
-      openai: {
-        base_url: "https://api.openai.com/v1",
+      custom: {
+        protocol: "openai",
+        base_url: "",
         api_key: "",
-        model: "gpt-4o",
-        max_tokens: 4096,
-      },
-      anthropic: {
-        base_url: "https://api.anthropic.com",
-        api_key: "",
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
-      },
-      deepseek: {
-        base_url: "https://api.deepseek.com/v1",
-        api_key: "",
-        model: "deepseek-chat",
+        model: "",
         max_tokens: 4096,
       },
     },

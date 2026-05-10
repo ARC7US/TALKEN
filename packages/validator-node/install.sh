@@ -3,17 +3,11 @@
 # ─────────────────────────────────────────────────────────────
 # TALKEN Validator Node - 一键安装脚本
 #
-# 用法（两种方式任选）:
-#   方式一（推荐）:
-#     curl -fsSL https://raw.githubusercontent.com/ARC7US/TALKEN/master/packages/validator-node/install.sh -o install.sh
-#     bash install.sh
-#
-#   方式二:
-#     curl -fsSL https://raw.githubusercontent.com/ARC7US/TALKEN/master/packages/validator-node/install.sh | bash
+# 用法:
+#   curl -fsSL https://raw.githubusercontent.com/ARC7US/TALKEN/master/packages/validator-node/install.sh -o install.sh
+#   bash install.sh
 # ─────────────────────────────────────────────────────────────
 
-# 关键：如果通过管道执行（curl | bash），stdin 不是终端，所有 read 都会失败。
-# 这里检测并用 /dev/tty 重新执行脚本，让 stdin 指向真正的终端。
 if [ ! -t 0 ] && [ -e /dev/tty ]; then
     exec bash "$0" </dev/tty
 fi
@@ -35,7 +29,6 @@ ok()    { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
 fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
 
-# 安全的交互式输入函数
 ask() {
     local prompt="$1"
     local default="$2"
@@ -43,6 +36,15 @@ ask() {
     echo -n "$prompt"
     read -r answer
     echo "${answer:-$default}"
+}
+
+ask_secret() {
+    local prompt="$1"
+    local answer
+    echo -n "$prompt"
+    read -rs answer
+    echo "" >&2
+    echo "$answer"
 }
 
 echo ""
@@ -94,24 +96,24 @@ ok "Git $(git --version | awk '{print $3}')"
 if ! command -v pnpm &>/dev/null; then
     info "正在安装 pnpm..."
     npm install -g pnpm 2>/dev/null || true
-
-    # 刷新 PATH
     NPM_GLOBAL=$(npm config get prefix 2>/dev/null)
     export PATH="$NPM_GLOBAL/bin:$PATH"
     hash -r
-
     if ! command -v pnpm &>/dev/null; then
-        warn "npm 全局安装 pnpm 失败，尝试 corepack..."
         corepack enable 2>/dev/null || true
         corepack prepare pnpm@latest --activate 2>/dev/null || true
         hash -r
     fi
-
     if ! command -v pnpm &>/dev/null; then
         fail "pnpm 安装失败。请手动安装: npm install -g pnpm"
     fi
 fi
 ok "pnpm $(pnpm -v)"
+
+# curl (用于检测 LLM 端点)
+if ! command -v curl &>/dev/null; then
+    fail "需要 curl。请安装: apt-get install curl"
+fi
 
 # ── 2. 克隆仓库 ──────────────────────────────────────────────
 
@@ -147,7 +149,6 @@ echo ""
 info "初始化配置文件..."
 
 cd "$INSTALL_DIR/packages/validator-node"
-
 CONFIG_FILE="$INSTALL_DIR/packages/validator-node/validator-config.yaml"
 
 if [ ! -f "$CONFIG_FILE" ]; then
@@ -169,25 +170,13 @@ staking:
   min_stake: 100
 
 llm:
-  default_provider: "openai"
-
+  default_provider: "custom"
   providers:
-    openai:
-      base_url: "https://api.openai.com/v1"
+    custom:
+      protocol: "openai"
+      base_url: ""
       api_key: ""
-      model: "gpt-4o"
-      max_tokens: 4096
-
-    anthropic:
-      base_url: "https://api.anthropic.com"
-      api_key: ""
-      model: "claude-sonnet-4-20250514"
-      max_tokens: 4096
-
-    deepseek:
-      base_url: "https://api.deepseek.com/v1"
-      api_key: ""
-      model: "deepseek-chat"
+      model: ""
       max_tokens: 4096
 
 scoring:
@@ -225,7 +214,7 @@ ok "配置文件已生成"
 
 echo ""
 echo "═══════════════════════════════════════════"
-echo "  配置向导"
+echo "  节点配置"
 echo "═══════════════════════════════════════════"
 echo ""
 
@@ -239,26 +228,100 @@ echo "  如果有公网 IP，输入 ws://你的IP:1789"
 echo "  如果没有，按回车跳过（稍后可手动配置）"
 server_url=$(ask "  节点地址: " "")
 
-# LLM 提供商
-echo ""
-echo "  选择 LLM 提供商（用于评分任务结果）:"
-echo "    1) OpenAI"
-echo "    2) Anthropic"
-echo "    3) DeepSeek"
-llm_choice=$(ask "  选择 [1]: " "1")
+# ── 5a. LLM 配置 ─────────────────────────────────────────────
 
-case $llm_choice in
-    1) provider="openai" ;;
-    2) provider="anthropic" ;;
-    3) provider="deepseek" ;;
-    *) provider="openai" ;;
+echo ""
+echo "═══════════════════════════════════════════"
+echo "  LLM 配置（用于评分任务结果）"
+echo "═══════════════════════════════════════════"
+echo ""
+echo "  选择 API 协议:"
+echo "    1) OpenAI 兼容协议（OpenAI / DeepSeek / vLLM / Ollama 等）"
+echo "    2) Anthropic 协议（Claude）"
+protocol_choice=$(ask "  选择 [1]: " "1")
+
+case $protocol_choice in
+    1) protocol="openai" ;;
+    2) protocol="anthropic" ;;
+    *) protocol="openai" ;;
 esac
 
-# API Key
 echo ""
-api_key=$(ask "  ${provider} API Key: " "")
+echo "  输入 LLM 端点地址:"
+if [ "$protocol" = "openai" ]; then
+    echo "  例如: https://api.openai.com/v1"
+    echo "        https://api.deepseek.com/v1"
+    echo "        http://localhost:11434/v1 (Ollama)"
+else
+    echo "  例如: https://api.anthropic.com"
+fi
+llm_base_url=$(ask "  端点: " "")
 
-# 更新配置文件
+# 移除末尾斜杠
+llm_base_url="${llm_base_url%/}"
+
+echo ""
+api_key=$(ask_secret "  API Key: ")
+
+# 自动检测模型
+echo ""
+info "正在检测可用模型..."
+
+detected_model=""
+if [ "$protocol" = "openai" ]; then
+    # OpenAI 兼容协议: GET /v1/models
+    models_response=$(curl -s --max-time 10 \
+        -H "Authorization: Bearer $api_key" \
+        "$llm_base_url/models" 2>/dev/null || echo "")
+
+    if [ -n "$models_response" ]; then
+        # 尝试用 node 解析 JSON（比 jq 更可靠）
+        detected_model=$(node -e "
+            const data = JSON.parse(process.argv[1] || '{}');
+            const models = data.data || data.models || [];
+            const ids = models.map(m => m.id || m);
+            const preferred = ids.find(id => /gpt-4|claude|deepseek|qwen|llama/i.test(id));
+            console.log(preferred || ids[0] || '');
+        " "$models_response" 2>/dev/null || echo "")
+    fi
+elif [ "$protocol" = "anthropic" ]; then
+    # Anthropic 没有公开的 models 端点，尝试调用一个最小请求来验证 key
+    test_response=$(curl -s --max-time 10 \
+        -H "x-api-key: $api_key" \
+        -H "anthropic-version: 2023-06-01" \
+        -H "Content-Type: application/json" \
+        -d '{"model":"claude-sonnet-4-20250514","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' \
+        "$llm_base_url/v1/messages" 2>/dev/null || echo "")
+
+    if echo "$test_response" | grep -q '"content"'; then
+        detected_model="claude-sonnet-4-20250514"
+    fi
+fi
+
+if [ -n "$detected_model" ]; then
+    ok "检测到模型: $detected_model"
+    use_detected=$(ask "  使用该模型？(Y/n): " "y")
+    if [ "$use_detected" = "n" ] || [ "$use_detected" = "N" ]; then
+        detected_model=""
+    fi
+fi
+
+if [ -z "$detected_model" ]; then
+    if [ "$protocol" = "openai" ]; then
+        echo "  未能自动检测，请手动输入模型名称。"
+        echo "  例如: gpt-4o, deepseek-chat, qwen-plus, llama3"
+    else
+        echo "  请输入模型名称。"
+        echo "  例如: claude-sonnet-4-20250514, claude-haiku-4-5-20251001"
+    fi
+    detected_model=$(ask "  模型名称: " "")
+fi
+
+if [ -z "$detected_model" ]; then
+    fail "模型名称不能为空。"
+fi
+
+# 写入配置
 if [ -n "$node_name" ]; then
     sed -i "s/name: .*/name: \"$node_name\"/" "$CONFIG_FILE"
 fi
@@ -267,59 +330,136 @@ if [ -n "$server_url" ]; then
     sed -i "s|server_url: .*|server_url: \"$server_url\"|" "$CONFIG_FILE"
 fi
 
-sed -i "s/default_provider: .*/default_provider: \"$provider\"/" "$CONFIG_FILE"
+# 写入 LLM 配置
+cat > /tmp/talken_llm.py << 'PYEOF'
+import sys, re
 
-if [ -n "$api_key" ]; then
-    case $provider in
-        openai)
-            sed -i "/openai:/,/api_key:/ s/api_key: .*/api_key: \"$api_key\"/" "$CONFIG_FILE"
-            ;;
-        anthropic)
-            sed -i "/anthropic:/,/api_key:/ s/api_key: .*/api_key: \"$api_key\"/" "$CONFIG_FILE"
-            ;;
-        deepseek)
-            sed -i "/deepseek:/,/api_key:/ s/api_key: .*/api_key: \"$api_key\"/" "$CONFIG_FILE"
-            ;;
-    esac
+config_file = sys.argv[1]
+protocol = sys.argv[2]
+base_url = sys.argv[3]
+api_key = sys.argv[4]
+model = sys.argv[5]
+
+with open(config_file, 'r') as f:
+    content = f.read()
+
+# 替换 default_provider
+content = re.sub(r'default_provider:.*', f'default_provider: "custom"', content)
+
+# 构建新的 providers 块
+providers_block = f'''  providers:
+    custom:
+      protocol: "{protocol}"
+      base_url: "{base_url}"
+      api_key: "{api_key}"
+      model: "{model}"
+      max_tokens: 4096'''
+
+# 替换 providers 部分
+content = re.sub(
+    r'  providers:\n(?:    \w+:\n(?:      .*\n)*)*',
+    providers_block + '\n',
+    content
+)
+
+with open(config_file, 'w') as f:
+    f.write(content)
+PYEOF
+
+if command -v python3 &>/dev/null; then
+    python3 /tmp/talken_llm.py "$CONFIG_FILE" "$protocol" "$llm_base_url" "$api_key" "$detected_model"
+elif command -v python &>/dev/null; then
+    python /tmp/talken_llm.py "$CONFIG_FILE" "$protocol" "$llm_base_url" "$api_key" "$detected_model"
+else
+    # 纯 bash 后备方案
+    sed -i "s|default_provider:.*|default_provider: \"custom\"|" "$CONFIG_FILE"
+    sed -i "s|protocol:.*|protocol: \"$protocol\"|" "$CONFIG_FILE"
+    sed -i "s|base_url:.*|base_url: \"$llm_base_url\"|" "$CONFIG_FILE"
+    sed -i "/custom:/,/api_key:/ s|api_key:.*|api_key: \"$api_key\"|" "$CONFIG_FILE"
+    sed -i "s|model:.*|model: \"$detected_model\"|" "$CONFIG_FILE"
 fi
+rm -f /tmp/talken_llm.py
 
-ok "配置已保存"
+ok "LLM 配置已保存: $protocol / $detected_model"
 
-# ── 6. 硬件检查 ──────────────────────────────────────────────
+# ── 5b. 硬件检查 ─────────────────────────────────────────────
 
 echo ""
 info "检查硬件..."
 npx tsx src/index.ts check 2>&1 || warn "硬件检查未通过，节点可能运行不稳定"
 
-# ── 7. 质押（可选） ──────────────────────────────────────────
+# ── 6. 质押（必须） ──────────────────────────────────────────
 
 echo ""
 echo "═══════════════════════════════════════════"
-echo "  质押 TALKEN（可选）"
+echo "  质押 TALKEN（必须）"
 echo "═══════════════════════════════════════════"
 echo ""
-echo "  质押 100 TALKEN 可以让你的节点被其他 Agent 自动发现。"
-echo "  不质押也可以运行节点，但只能通过直接连接使用。"
+echo "  运营节点需要质押 100 TALKEN 到链上合约。"
+echo "  质押后你的节点会被其他 Agent 自动发现。"
+echo "  解除质押时 TALKEN 会全额退还。"
 echo ""
-do_stake=$(ask "  是否现在质押？(y/N): " "n")
+echo "  钱包私钥将使用 AES-256 加密后存储在 ~/.talken/key.enc"
+echo "  启动节点时需要输入密码解密。"
+echo ""
 
-if [ "$do_stake" = "y" ] || [ "$do_stake" = "Y" ]; then
-    echo ""
-    private_key=$(ask "  钱包私钥 (0x...): " "")
+while true; do
+    private_key=$(ask_secret "  钱包私钥 (0x...): ")
     if [ -n "$private_key" ]; then
-        stake_url=$(ask "  节点公网地址 (ws://IP:1789): " "")
-        if [ -n "$stake_url" ]; then
-            info "正在质押..."
-            TALKEN_WALLET_PRIVATE_KEY="$private_key" npx tsx src/index.ts stake --url "$stake_url" 2>&1
-        else
-            warn "未输入地址，跳过质押"
-        fi
-    else
-        warn "未输入私钥，跳过质押"
+        break
     fi
-fi
+    warn "私钥不能为空，请重新输入。"
+done
 
-# ── 8. 创建启动脚本 ──────────────────────────────────────────
+while true; do
+    key_password=$(ask_secret "  设置加密密码: ")
+    if [ ${#key_password} -lt 6 ]; then
+        warn "密码至少 6 位，请重新设置。"
+        continue
+    fi
+    key_password2=$(ask_secret "  确认加密密码: ")
+    if [ "$key_password" = "$key_password2" ]; then
+        break
+    fi
+    warn "两次密码不一致，请重新设置。"
+done
+
+echo ""
+info "正在质押并注册节点..."
+
+# 调用 Node.js 脚本完成质押
+TALKEN_WALLET_PRIVATE_KEY="$private_key" TALKEN_KEY_PASSWORD="$key_password" \
+    npx tsx -e "
+const { encryptKey } = require('./src/keyring.ts');
+const { stakeAndRegister } = require('./src/staking.ts');
+const { loadConfig } = require('./src/config.ts');
+
+async function main() {
+    const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
+    const pw = process.env.TALKEN_KEY_PASSWORD;
+
+    // 加密存储私钥
+    encryptKey(pk, pw);
+    console.log('私钥已加密存储。');
+
+    // 获取配置中的端口
+    const config = loadConfig();
+    const port = config.network.listen_port || 1789;
+    const url = config.network.server_url || 'ws://0.0.0.0:' + port;
+
+    // 质押
+    const result = await stakeAndRegister(pk, url);
+    if (result.success) {
+        console.log('质押成功! TX: ' + result.txHash);
+    } else {
+        console.error('质押失败: ' + result.error);
+        process.exit(1);
+    }
+}
+main().catch(e => { console.error(e.message); process.exit(1); });
+" 2>&1
+
+# ── 7. 创建启动脚本 ──────────────────────────────────────────
 
 echo ""
 info "创建启动脚本..."
@@ -329,6 +469,7 @@ cat > "$INSTALL_DIR/start.sh" << SCRIPT
 export PATH="\$(npm config get prefix)/bin:\$PATH"
 cd "\$(dirname "\$0")/packages/validator-node"
 echo "Starting TALKEN Validator Node..."
+echo "请输入密钥密码以启动节点："
 npx tsx src/index.ts start
 SCRIPT
 chmod +x "$INSTALL_DIR/start.sh"
@@ -337,6 +478,7 @@ cat > "$INSTALL_DIR/start.cmd" << 'SCRIPT'
 @echo off
 cd /d "%~dp0\packages\validator-node"
 echo Starting TALKEN Validator Node...
+echo 请输入密钥密码以启动节点：
 npx tsx src/index.ts start
 SCRIPT
 
@@ -350,13 +492,10 @@ echo -e "  ${GREEN}安装完成！${NC}"
 echo "═══════════════════════════════════════════"
 echo ""
 echo "  配置文件: $CONFIG_FILE"
+echo "  加密密钥: ~/.talken/key.enc"
 echo ""
-echo "  启动节点:"
+echo "  启动节点（需要输入密码）:"
 echo "    $INSTALL_DIR/start.sh"
-echo ""
-echo "  或手动启动:"
-echo "    cd $INSTALL_DIR/packages/validator-node"
-echo "    npx tsx src/index.ts start"
 echo ""
 echo "  常用命令:"
 echo "    npx tsx src/index.ts status       # 查看状态"

@@ -4,16 +4,21 @@
  * TALKEN Validator Node CLI
  *
  * Usage:
- *   talken-validator init     - 初始化配置
- *   talken-validator start   - 启动节点
- *   talken-validator status  - 查看状态
- *   talken-validator check   - 检查硬件
+ *   talken-validator init         - 初始化配置
+ *   talken-validator start       - 启动节点（需要输入密码解密私钥）
+ *   talken-validator status      - 查看状态
+ *   talken-validator check       - 检查硬件
+ *   talken-validator stake       - 质押 TALKEN 并注册
+ *   talken-validator unstake     - 解除质押
+ *   talken-validator stake-status - 查看质押状态
  */
 
 import { loadConfig, saveConfig, resolveEnvVars, type ValidatorConfig } from "./config.js";
 import { checkHardware, formatHardwareReport } from "./hardware-check.js";
 import { NodeManager } from "./node-manager.js";
 import { stakeAndRegister, unstake, checkStakeStatus } from "./staking.js";
+import { encryptKey, decryptKey, hasKeyring } from "./keyring.js";
+import { createInterface } from "readline";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
@@ -53,7 +58,65 @@ async function main() {
   }
 }
 
-// ── Commands ─────────────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────
+
+function promptPassword(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    // Hide input on Unix-like systems
+    if (process.stdin.isTTY) {
+      (rl as any).terminal = true;
+    }
+
+    // Write prompt manually to avoid newline issues
+    process.stdout.write(prompt);
+
+    let password = "";
+    const onData = (char: Buffer) => {
+      const c = char.toString();
+      if (c === "\n" || c === "\r") {
+        process.stdin.removeListener("data", onData);
+        process.stdin.pause();
+        rl.close();
+        process.stdout.write("\n");
+        resolve(password);
+      } else if (c === "" || c === "\b") {
+        // Backspace
+        if (password.length > 0) {
+          password = password.slice(0, -1);
+          process.stdout.write("\b \b");
+        }
+      } else {
+        password += c;
+        process.stdout.write("*");
+      }
+    };
+
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+      process.stdin.resume();
+      process.stdin.on("data", onData);
+    } else {
+      // Non-TTY fallback: read normally
+      rl.question("", (answer) => {
+        rl.close();
+        resolve(answer);
+      });
+    }
+  });
+}
+
+function promptInput(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+// ── Commands ─────────────────────────────────────────────────────
 
 function cmdHelp(): void {
   console.log(`
@@ -61,7 +124,7 @@ TALKEN Validator Node
 
 命令:
   init          初始化配置文件 (validator-config.yaml)
-  start         启动验证节点
+  start         启动验证节点（需要输入密码解密私钥）
   status        查看节点状态
   check         检查硬件是否满足要求
   stake         质押 TALKEN 并注册为中继节点
@@ -69,17 +132,11 @@ TALKEN Validator Node
   stake-status  查看质押状态
   help          显示帮助信息
 
-环境变量:
-  TALKEN_WALLET_PRIVATE_KEY  钱包私钥 (stake/unstake 必需)
-  OPENAI_API_KEY             OpenAI API Key
-  ANTHROPIC_API_KEY          Anthropic API Key
-  DEEPSEEK_API_KEY           DeepSeek API Key
-
 示例:
   talken-validator init
   talken-validator check
-  TALKEN_WALLET_PRIVATE_KEY=0xabc... talken-validator stake --url ws://1.2.3.4:1789
-  OPENAI_API_KEY=sk-xxx talken-validator start
+  talken-validator stake          # 首次运行会要求输入私钥并加密存储
+  talken-validator start          # 输入密码解密私钥后启动
 `);
 }
 
@@ -95,16 +152,14 @@ async function cmdInit(): Promise<void> {
   const configPath = getConfigPath();
   const config = loadConfig(configPath);
 
-  // Fill in environment variables
   if (process.env.TALKEN_URL) config.network.server_url = process.env.TALKEN_URL;
   if (process.env.TALKEN_AGENT_ID) config.node.name = process.env.TALKEN_AGENT_ID;
 
   saveConfig(config, configPath);
   console.log(`配置文件已生成: ${configPath}`);
-  console.log("请编辑配置文件，填入 LLM API Key 等信息。");
+  console.log("请编辑配置文件，填入 LLM 端点和 API Key。");
   console.log(`\n当前配置:`);
   console.log(`  节点名称: ${config.node.name}`);
-  console.log(`  服务器: ${config.network.server_url}`);
   console.log(`  LLM 提供商: ${config.llm.default_provider}`);
 }
 
@@ -129,10 +184,26 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
-  // Start node
-  const manager = new NodeManager(resolved);
+  // Check keyring
+  if (!hasKeyring()) {
+    console.error("\n错误: 未找到加密密钥。请先运行 `talken-validator stake` 完成质押。");
+    process.exit(1);
+  }
 
-  // Handle graceful shutdown
+  // Prompt for password to decrypt private key
+  console.log("");
+  const password = await promptPassword("输入密钥密码: ");
+  let privateKey: string;
+  try {
+    privateKey = decryptKey(password);
+  } catch {
+    console.error("\n密码错误或密钥文件损坏。");
+    process.exit(1);
+  }
+
+  // Start node
+  const manager = new NodeManager(resolved, privateKey);
+
   process.on("SIGINT", () => {
     console.log("\n正在停止节点...");
     manager.stop();
@@ -148,8 +219,6 @@ async function cmdStart(): Promise<void> {
   try {
     await manager.init();
     await manager.start();
-
-    // Keep alive
     await new Promise(() => {});
   } catch (err: any) {
     console.error(`\n启动失败: ${err.message}`);
@@ -165,34 +234,59 @@ async function cmdStatus(): Promise<void> {
     console.log(status);
   } catch (err: any) {
     console.error(`无法获取状态: ${err.message}`);
-    console.error("确保节点正在运行，并且服务器可达。");
     process.exit(1);
   }
 }
 
 async function cmdStake(): Promise<void> {
-  const privateKey = process.env.TALKEN_WALLET_PRIVATE_KEY;
-  if (!privateKey) {
-    console.error("错误: 请设置环境变量 TALKEN_WALLET_PRIVATE_KEY");
-    console.error("示例: TALKEN_WALLET_PRIVATE_KEY=0xabc... talken-validator stake --url ws://1.2.3.4:1789");
-    process.exit(1);
+  // Check if already have keyring
+  let privateKey: string;
+
+  if (hasKeyring()) {
+    console.log("检测到已有密钥。");
+    const password = await promptPassword("输入密钥密码: ");
+    try {
+      privateKey = decryptKey(password);
+    } catch {
+      console.error("密码错误。");
+      process.exit(1);
+    }
+  } else {
+    console.log("首次质押，需要设置钱包私钥。");
+    console.log("私钥将使用 AES-256 加密存储在 ~/.talken/key.enc\n");
+    privateKey = await promptInput("钱包私钥 (0x...): ");
+    if (!privateKey) {
+      console.error("私钥不能为空。");
+      process.exit(1);
+    }
+
+    const password = await promptPassword("设置加密密码: ");
+    const password2 = await promptPassword("确认加密密码: ");
+    if (password !== password2) {
+      console.error("两次密码不一致。");
+      process.exit(1);
+    }
+
+    encryptKey(privateKey, password);
+    console.log("私钥已加密存储。");
   }
 
-  const urlIdx = args.indexOf("--url");
-  const relayUrl = urlIdx !== -1 ? args[urlIdx + 1] : undefined;
-  if (!relayUrl) {
-    console.error("错误: 请指定中继地址 --url");
-    console.error("示例: --url ws://1.2.3.4:1789");
-    console.error("      --url https://relay.example.com:1789");
-    process.exit(1);
-  }
+  // Get relay URL
+  const config = loadConfig();
+  const port = config.network.listen_port || 1789;
+  const defaultUrl = config.network.server_url || `ws://0.0.0.0:${port}`;
+
+  console.log(`\n默认中继地址: ${defaultUrl}`);
+  const customUrl = await promptInput(`中继地址 [${defaultUrl}]: `);
+  const relayUrl = customUrl || defaultUrl;
 
   try {
-    console.log("=== TALKEN 中继节点质押 ===\n");
+    console.log("\n=== TALKEN 中继节点质押 ===\n");
     const result = await stakeAndRegister(privateKey, relayUrl);
     if (result.success) {
       console.log(`\n质押成功！TX: ${result.txHash}`);
       console.log("你的节点已被注册到链上，其他 Agent 可以通过 RelayRegistry 发现你的节点。");
+      console.log("\n现在可以运行 `talken-validator start` 启动节点。");
     } else {
       console.error(`\n质押失败: ${result.error}`);
       process.exit(1);
@@ -204,18 +298,26 @@ async function cmdStake(): Promise<void> {
 }
 
 async function cmdUnstake(): Promise<void> {
-  const privateKey = process.env.TALKEN_WALLET_PRIVATE_KEY;
-  if (!privateKey) {
-    console.error("错误: 请设置环境变量 TALKEN_WALLET_PRIVATE_KEY");
+  if (!hasKeyring()) {
+    console.error("未找到加密密钥。");
+    process.exit(1);
+  }
+
+  const password = await promptPassword("输入密钥密码: ");
+  let privateKey: string;
+  try {
+    privateKey = decryptKey(password);
+  } catch {
+    console.error("密码错误。");
     process.exit(1);
   }
 
   try {
-    console.log("=== 解除质押 ===\n");
+    console.log("\n=== 解除质押 ===\n");
     const result = await unstake(privateKey);
     if (result.success) {
       console.log(`\n解除质押成功！TX: ${result.txHash}`);
-      console.log("1000 TALKEN 已退还到你的钱包。");
+      console.log("100 TALKEN 已退还到你的钱包。");
     } else {
       console.error(`\n失败: ${result.error}`);
       process.exit(1);
@@ -227,24 +329,30 @@ async function cmdUnstake(): Promise<void> {
 }
 
 async function cmdStakeStatus(): Promise<void> {
-  const privateKey = process.env.TALKEN_WALLET_PRIVATE_KEY;
   const address = args[args.indexOf("--address") + 1];
 
-  if (!privateKey && !address) {
-    console.error("错误: 请设置 TALKEN_WALLET_PRIVATE_KEY 或使用 --address 指定地址");
+  if (!address && !hasKeyring()) {
+    console.error("请使用 --address 指定地址，或先运行 stake 命令。");
     process.exit(1);
   }
 
-  try {
-    let addr = address;
-    if (!addr && privateKey) {
+  let addr = address;
+  if (!addr) {
+    const password = await promptPassword("输入密钥密码: ");
+    try {
       const { privateKeyToAccount } = await import("viem/accounts");
-      const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
-      addr = privateKeyToAccount(key as `0x${string}`).address;
+      const key = decryptKey(password);
+      const k = key.startsWith("0x") ? key : `0x${key}`;
+      addr = privateKeyToAccount(k as `0x${string}`).address;
+    } catch {
+      console.error("密码错误。");
+      process.exit(1);
     }
+  }
 
+  try {
     const status = await checkStakeStatus(addr!);
-    console.log("=== 质押状态 ===\n");
+    console.log("\n=== 质押状态 ===\n");
     console.log(`地址:     ${addr}`);
     console.log(`已质押:   ${status.staked ? "是" : "否"}`);
     console.log(`TALKEN:   ${status.balance}`);
@@ -260,7 +368,7 @@ function getConfigPath(): string {
   return undefined as any;
 }
 
-// ── Run ──────────────────────────────────────────────────────────────────
+// ── Run ──────────────────────────────────────────────────────────
 
 main().catch((err) => {
   console.error(err);

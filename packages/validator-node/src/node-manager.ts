@@ -27,12 +27,14 @@ export interface NodeStatus {
 export class NodeManager {
   private config: ValidatorConfig;
   private relay: RelayServer;
+  private privateKey: string | null;
   private tasksScored = 0;
   private startTime = 0;
   private running = false;
 
-  constructor(config: ValidatorConfig) {
+  constructor(config: ValidatorConfig, privateKey?: string) {
     this.config = config;
+    this.privateKey = privateKey || null;
     const port = config.network.listen_port || 1789;
     this.relay = new RelayServer(config, port);
   }
@@ -86,28 +88,26 @@ export class NodeManager {
    * Register this node on the RelayRegistry contract.
    */
   private async registerOnChain(): Promise<void> {
-    const privateKey = process.env.TALKEN_WALLET_PRIVATE_KEY;
-    if (!privateKey) {
-      console.log("No TALKEN_WALLET_PRIVATE_KEY set, skipping on-chain registration");
-      console.log("To register: talken-validator stake --url ws://<your-ip>:1789");
+    if (!this.privateKey) {
+      console.log("No private key available, skipping on-chain registration check");
       return;
     }
 
-    const port = this.config.network.listen_port || 1789;
-    const relayUrl = this.config.network.server_url || `ws://0.0.0.0:${port}`;
-
     try {
-      const { stakeAndRegister } = await import("./staking.js");
-      console.log(`Registering on-chain with URL: ${relayUrl}...`);
-      const result = await stakeAndRegister(privateKey, relayUrl);
-      if (result.success) {
-        console.log(`On-chain registration complete. TX: ${result.txHash}`);
+      const { privateKeyToAccount } = await import("viem/accounts");
+      const key = this.privateKey.startsWith("0x") ? this.privateKey : `0x${this.privateKey}`;
+      const account = privateKeyToAccount(key as `0x${string}`);
+
+      const { checkStakeStatus } = await import("./staking.js");
+      const status = await checkStakeStatus(account.address);
+
+      if (status.staked) {
+        console.log(`节点已质押注册 (${account.address})`);
       } else {
-        console.warn(`On-chain registration skipped: ${result.error}`);
+        console.warn("节点尚未质押。请运行 `talken-validator stake` 完成质押。");
       }
     } catch (e: any) {
-      console.warn(`On-chain registration failed: ${e.message}`);
-      console.warn("Node will still work via direct WebSocket connections");
+      console.warn(`链上状态检查失败: ${e.message}`);
     }
   }
 
