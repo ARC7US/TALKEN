@@ -393,7 +393,7 @@ ok "LLM 配置已保存: $protocol / $detected_model"
 
 echo ""
 info "检查硬件..."
-npx tsx src/index.ts check 2>&1 || warn "硬件检查未通过，节点可能运行不稳定"
+pnpm exec tsx src/index.ts check 2>&1 || warn "硬件检查未通过，节点可能运行不稳定"
 
 # ── 6. 质押（必须） ──────────────────────────────────────────
 
@@ -423,52 +423,35 @@ PORT_VAL=$(grep 'listen_port' "$CONFIG_FILE" | grep -o '[0-9]*' || echo "1789")
 SERVER_URL_VAL=$(grep 'server_url' "$CONFIG_FILE" | sed 's/.*: *"\(.*\)".*/\1/')
 RELAY_URL="${SERVER_URL_VAL:-ws://0.0.0.0:$PORT_VAL}"
 
-# 调用 Node.js 脚本完成质押
+# 使用独立脚本（纯 node，不依赖 tsx）
 TALKEN_WALLET_PRIVATE_KEY="$private_key" \
-    npx tsx -e "
-async function main() {
-    const { stakeAndRegister } = await import('./src/staking.ts');
+    node "$INSTALL_DIR/packages/validator-node/scripts/stake.mjs" "$RELAY_URL" 2>&1
 
-    const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
-    const url = '$RELAY_URL';
-
-    const result = await stakeAndRegister(pk, url);
-    if (result.success) {
-        console.log('质押成功! TX: ' + result.txHash);
-    } else {
-        console.error('质押失败: ' + result.error);
-        process.exit(1);
-    }
-}
-main().catch(e => { console.error(e.message); process.exit(1); });
-" 2>&1
+stake_exit=$?
 
 # 质押成功后，加密存储私钥
-echo ""
-info "正在加密存储私钥..."
+if [ $stake_exit -eq 0 ]; then
+    echo ""
+    info "正在加密存储私钥..."
 
-while true; do
-    key_password=$(ask_secret "  设置加密密码（启动节点时需要）: ")
-    if [ ${#key_password} -lt 6 ]; then
-        warn "密码至少 6 位，请重新设置。"
-        continue
-    fi
-    key_password2=$(ask_secret "  确认密码: ")
-    if [ "$key_password" = "$key_password2" ]; then
-        break
-    fi
-    warn "两次密码不一致，请重新设置。"
-done
+    while true; do
+        key_password=$(ask_secret "  设置加密密码（启动节点时需要）: ")
+        if [ ${#key_password} -lt 6 ]; then
+            warn "密码至少 6 位，请重新设置。"
+            continue
+        fi
+        key_password2=$(ask_secret "  确认密码: ")
+        if [ "$key_password" = "$key_password2" ]; then
+            break
+        fi
+        warn "两次密码不一致，请重新设置。"
+    done
 
-TALKEN_WALLET_PRIVATE_KEY="$private_key" TALKEN_KEY_PASSWORD="$key_password" \
-    npx tsx -e "
-async function main() {
-    const { encryptKey } = await import('./src/keyring.ts');
-    encryptKey(process.env.TALKEN_WALLET_PRIVATE_KEY, process.env.TALKEN_KEY_PASSWORD);
-    console.log('私钥已加密存储在 ~/.talken/key.enc');
-}
-main().catch(e => { console.error(e.message); process.exit(1); });
-" 2>&1
+    TALKEN_WALLET_PRIVATE_KEY="$private_key" TALKEN_KEY_PASSWORD="$key_password" \
+        node "$INSTALL_DIR/packages/validator-node/scripts/encrypt-key.mjs" 2>&1
+else
+    warn "质押失败，跳过密钥加密存储。"
+fi
 
 # ── 7. 创建启动脚本 ──────────────────────────────────────────
 
@@ -477,11 +460,10 @@ info "创建启动脚本..."
 
 cat > "$INSTALL_DIR/start.sh" << SCRIPT
 #!/usr/bin/env bash
-export PATH="\$(npm config get prefix)/bin:\$PATH"
-cd "\$(dirname "\$0")/packages/validator-node"
+cd "\$(dirname "\$0")"
 echo "Starting TALKEN Validator Node..."
 echo "请输入密钥密码以启动节点："
-npx tsx src/index.ts start
+pnpm --filter @talken/validator-node run start
 SCRIPT
 chmod +x "$INSTALL_DIR/start.sh"
 
