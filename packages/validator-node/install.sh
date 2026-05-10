@@ -393,7 +393,7 @@ ok "LLM 配置已保存: $protocol / $detected_model"
 
 echo ""
 info "检查硬件..."
-pnpm exec tsx src/index.ts check 2>&1 || warn "硬件检查未通过，节点可能运行不稳定"
+node "$INSTALL_DIR/packages/validator-node/scripts/check-hardware.mjs" 2>&1 || warn "硬件检查未通过，节点可能运行不稳定"
 
 # ── 6. 质押（必须） ──────────────────────────────────────────
 
@@ -469,10 +469,10 @@ chmod +x "$INSTALL_DIR/start.sh"
 
 cat > "$INSTALL_DIR/start.cmd" << 'SCRIPT'
 @echo off
-cd /d "%~dp0\packages\validator-node"
+cd /d "%~dp0"
 echo Starting TALKEN Validator Node...
 echo 请输入密钥密码以启动节点：
-npx tsx src/index.ts start
+pnpm --filter @talken/validator-node run start
 SCRIPT
 
 ok "启动脚本已创建"
@@ -490,10 +490,10 @@ echo ""
 echo "  启动节点（需要输入密码）:"
 echo "    $INSTALL_DIR/start.sh"
 echo ""
-echo "  常用命令:"
-echo "    npx tsx src/index.ts status       # 查看状态"
-echo "    npx tsx src/index.ts stake-status  # 查看质押状态"
-echo "    npx tsx src/index.ts unstake       # 解除质押"
+echo "  常用命令（在 ~/talken-validator 目录下运行）:"
+echo "    pnpm --filter @talken/validator-node exec tsx src/index.ts status"
+echo "    pnpm --filter @talken/validator-node exec tsx src/index.ts stake-status"
+echo "    pnpm --filter @talken/validator-node exec tsx src/index.ts unstake"
 echo ""
 echo "  更多信息: $INSTALL_DIR/packages/validator-node/SETUP.md"
 echo ""

@@ -9,8 +9,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "npx tsx src/index.ts start",
-    "dev": "npx tsx src/index.ts"
+    "start": "pnpm exec tsx src/index.ts start",
+    "dev": "pnpm exec tsx src/index.ts"
   },
   "dependencies": {
     "@talken/agent-sdk": "workspace:*",
