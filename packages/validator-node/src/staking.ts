@@ -1,6 +1,7 @@
 /**
  * TALKEN Staking Module
  * Handles approve + register on Arbitrum RelayRegistry contract.
+ * Unstake is a two-step process: requestUnstake → wait 7 days → claimUnstake.
  */
 
 import { createPublicClient, createWalletClient, http, parseEther, formatEther, type Address, type Hash } from "viem";
@@ -11,6 +12,8 @@ import { privateKeyToAccount } from "viem/accounts";
 const TALKEN_TOKEN: Address = "0x827559a7515631d621B8a5a4D30ab85667Daf228";
 const RELAY_REGISTRY: Address = "0x085E3338c7C6BE74e5069838cde9AFE5B67e43c8";
 const STAKE_AMOUNT = parseEther("100");
+
+const ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc";
 
 // Minimal ABIs
 const ERC20_ABI = [
@@ -52,22 +55,64 @@ const REGISTRY_ABI = [
     outputs: [],
   },
   {
-    name: "unregister",
+    name: "requestUnstake",
     type: "function",
     stateMutability: "nonpayable",
     inputs: [],
     outputs: [],
   },
   {
-    name: "staked",
+    name: "claimUnstake",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
+  {
+    name: "stakes",
     type: "function",
     stateMutability: "view",
     inputs: [{ name: "", type: "address" }],
+    outputs: [
+      {
+        type: "tuple",
+        components: [
+          { name: "active", type: "bool" },
+          { name: "stakedAt", type: "uint256" },
+          { name: "unstakeAfter", type: "uint256" },
+        ],
+      },
+    ],
+  },
+  {
+    name: "isStaked",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "operator", type: "address" }],
     outputs: [{ name: "", type: "bool" }],
   },
+  {
+    name: "isUnbonding",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "operator", type: "address" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    name: "MIN_STAKE_DURATION",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "UNBONDING_PERIOD",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
 ] as const;
-
-const ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc";
 
 export interface StakeResult {
   success: boolean;
@@ -75,24 +120,19 @@ export interface StakeResult {
   error?: string;
 }
 
+function makeClient(privateKey: string) {
+  const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
+  const account = privateKeyToAccount(key as `0x${string}`);
+  const publicClient = createPublicClient({ chain: arbitrum, transport: http(ARBITRUM_RPC) });
+  const walletClient = createWalletClient({ account, chain: arbitrum, transport: http(ARBITRUM_RPC) });
+  return { account, publicClient, walletClient };
+}
+
 export async function stakeAndRegister(
   privateKey: string,
   relayUrl: string,
 ): Promise<StakeResult> {
-  // Normalize private key
-  const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
-  const account = privateKeyToAccount(key as `0x${string}`);
-
-  const publicClient = createPublicClient({
-    chain: arbitrum,
-    transport: http(ARBITRUM_RPC),
-  });
-
-  const walletClient = createWalletClient({
-    account,
-    chain: arbitrum,
-    transport: http(ARBITRUM_RPC),
-  });
+  const { account, publicClient, walletClient } = makeClient(privateKey);
 
   console.log(`钱包地址: ${account.address}`);
   console.log(`中继地址: ${relayUrl}`);
@@ -114,9 +154,7 @@ export async function stakeAndRegister(
     functionName: "balanceOf",
     args: [account.address],
   });
-
   console.log(`TALKEN 余额: ${formatEther(balance)}`);
-
   if (balance < STAKE_AMOUNT) {
     return {
       success: false,
@@ -124,14 +162,13 @@ export async function stakeAndRegister(
     };
   }
 
-  // 2. Check if already staked
+  // 3. Check if already staked
   const alreadyStaked = await publicClient.readContract({
     address: RELAY_REGISTRY,
     abi: REGISTRY_ABI,
-    functionName: "staked",
+    functionName: "isStaked",
     args: [account.address],
   });
-
   if (alreadyStaked) {
     return {
       success: false,
@@ -139,7 +176,7 @@ export async function stakeAndRegister(
     };
   }
 
-  // 3. Check allowance
+  // 4. Check allowance
   const allowance = await publicClient.readContract({
     address: TALKEN_TOKEN,
     abi: ERC20_ABI,
@@ -147,7 +184,7 @@ export async function stakeAndRegister(
     args: [account.address, RELAY_REGISTRY],
   });
 
-  // 4. Approve if needed
+  // 5. Approve if needed
   if (allowance < STAKE_AMOUNT) {
     console.log("正在授权 TALKEN 给 RelayRegistry...");
     const approveHash = await walletClient.writeContract({
@@ -157,17 +194,13 @@ export async function stakeAndRegister(
       args: [RELAY_REGISTRY, STAKE_AMOUNT],
     });
     console.log(`授权 TX: ${approveHash}`);
-
-    // Wait for confirmation
-    const approveReceipt = await publicClient.waitForTransactionReceipt({
-      hash: approveHash,
-    });
+    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
     console.log(`授权确认 (Block ${approveReceipt.blockNumber})`);
   } else {
     console.log("已有足够授权，跳过 approve");
   }
 
-  // 5. Register
+  // 6. Register
   console.log("正在注册中继节点...");
   const registerHash = await walletClient.writeContract({
     address: RELAY_REGISTRY,
@@ -176,78 +209,127 @@ export async function stakeAndRegister(
     args: [relayUrl],
   });
   console.log(`注册 TX: ${registerHash}`);
-
-  const registerReceipt = await publicClient.waitForTransactionReceipt({
-    hash: registerHash,
-  });
+  const registerReceipt = await publicClient.waitForTransactionReceipt({ hash: registerHash });
   console.log(`注册确认 (Block ${registerReceipt.blockNumber})`);
 
-  return {
-    success: true,
-    txHash: registerHash,
-  };
+  return { success: true, txHash: registerHash };
 }
 
-export async function unstake(privateKey: string): Promise<StakeResult> {
-  const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
-  const account = privateKeyToAccount(key as `0x${string}`);
-
-  const publicClient = createPublicClient({
-    chain: arbitrum,
-    transport: http(ARBITRUM_RPC),
-  });
-
-  const walletClient = createWalletClient({
-    account,
-    chain: arbitrum,
-    transport: http(ARBITRUM_RPC),
-  });
-
+/**
+ * Step 1: Request to unstake. Starts a 7-day unbonding period.
+ * The node remains "active" during unbonding so it can finish pending tasks,
+ * but the network should stop assigning new ones.
+ */
+export async function requestUnstake(privateKey: string): Promise<StakeResult> {
+  const { account, publicClient, walletClient } = makeClient(privateKey);
   console.log(`钱包地址: ${account.address}`);
 
-  // Check if staked
-  const isStaked = await publicClient.readContract({
+  const staked = await publicClient.readContract({
     address: RELAY_REGISTRY,
     abi: REGISTRY_ABI,
-    functionName: "staked",
+    functionName: "isStaked",
     args: [account.address],
   });
-
-  if (!isStaked) {
-    return { success: false, error: "该地址未质押，无法解除。" };
+  if (!staked) {
+    return { success: false, error: "该地址未质押。" };
   }
 
-  console.log("正在解除质押...");
+  const unbonding = await publicClient.readContract({
+    address: RELAY_REGISTRY,
+    abi: REGISTRY_ABI,
+    functionName: "isUnbonding",
+    args: [account.address],
+  });
+  if (unbonding) {
+    return { success: false, error: "已经在解绑中，请等待 7 天后执行 claim-unstake 提取。" };
+  }
+
+  console.log("正在申请解除质押...");
   const hash = await walletClient.writeContract({
     address: RELAY_REGISTRY,
     abi: REGISTRY_ABI,
-    functionName: "unregister",
+    functionName: "requestUnstake",
   });
   console.log(`TX: ${hash}`);
-
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
-  console.log(`解除质押确认 (Block ${receipt.blockNumber})`);
+  console.log(`申请成功。7 天后可执行 claim-unstake 提取 TALKEN。(Block ${receipt.blockNumber})`);
 
   return { success: true, txHash: hash };
 }
 
-export async function checkStakeStatus(address: string): Promise<{
-  staked: boolean;
-  balance: string;
-  relayUrl?: string;
-}> {
-  const publicClient = createPublicClient({
-    chain: arbitrum,
-    transport: http(ARBITRUM_RPC),
+/**
+ * Step 2: Claim stake after the 7-day unbonding period expires.
+ */
+export async function claimUnstake(privateKey: string): Promise<StakeResult> {
+  const { account, publicClient, walletClient } = makeClient(privateKey);
+  console.log(`钱包地址: ${account.address}`);
+
+  const staked = await publicClient.readContract({
+    address: RELAY_REGISTRY,
+    abi: REGISTRY_ABI,
+    functionName: "isStaked",
+    args: [account.address],
+  });
+  if (!staked) {
+    return { success: false, error: "该地址未质押。" };
+  }
+
+  const stakeInfo = await publicClient.readContract({
+    address: RELAY_REGISTRY,
+    abi: REGISTRY_ABI,
+    functionName: "stakes",
+    args: [account.address],
   });
 
+  if (stakeInfo.unstakeAfter === 0n) {
+    return { success: false, error: "尚未申请解除质押，请先执行 request-unstake。" };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  if (now < Number(stakeInfo.unstakeAfter)) {
+    const remaining = Number(stakeInfo.unstakeAfter) - now;
+    const days = Math.ceil(remaining / 86400);
+    return {
+      success: false,
+      error: `解绑期未结束，还需等待约 ${days} 天。`,
+    };
+  }
+
+  console.log("正在提取质押的 TALKEN...");
+  const hash = await walletClient.writeContract({
+    address: RELAY_REGISTRY,
+    abi: REGISTRY_ABI,
+    functionName: "claimUnstake",
+  });
+  console.log(`TX: ${hash}`);
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  console.log(`提取成功! 100 TALKEN 已退回。(Block ${receipt.blockNumber})`);
+
+  return { success: true, txHash: hash };
+}
+
+/**
+ * Legacy one-step unstake (for old contract). Will fail on new contract.
+ */
+export async function unstake(privateKey: string): Promise<StakeResult> {
+  return requestUnstake(privateKey);
+}
+
+export async function checkStakeStatus(address: string): Promise<{
+  staked: boolean;
+  unbonding: boolean;
+  balance: string;
+  stakeAge?: string;
+  unstakeAfter?: string;
+}> {
+  const publicClient = createPublicClient({ chain: arbitrum, transport: http(ARBITRUM_RPC) });
   const addr = address as Address;
 
-  const [staked, balance] = await Promise.all([
+  const [stakeInfo, balance] = await Promise.all([
     publicClient.readContract({
       address: RELAY_REGISTRY,
       abi: REGISTRY_ABI,
-      functionName: "staked",
+      functionName: "stakes",
       args: [addr],
     }),
     publicClient.readContract({
@@ -258,8 +340,33 @@ export async function checkStakeStatus(address: string): Promise<{
     }),
   ]);
 
-  return {
-    staked,
+  const result: {
+    staked: boolean;
+    unbonding: boolean;
+    balance: string;
+    stakeAge?: string;
+    unstakeAfter?: string;
+  } = {
+    staked: stakeInfo.active,
+    unbonding: stakeInfo.active && stakeInfo.unstakeAfter > 0n,
     balance: formatEther(balance),
   };
+
+  if (stakeInfo.active && stakeInfo.stakedAt > 0n) {
+    const age = Math.floor(Date.now() / 1000) - Number(stakeInfo.stakedAt);
+    const days = Math.floor(age / 86400);
+    result.stakeAge = `${days} 天`;
+  }
+
+  if (stakeInfo.active && stakeInfo.unstakeAfter > 0n) {
+    const remaining = Number(stakeInfo.unstakeAfter) - Math.floor(Date.now() / 1000);
+    if (remaining > 0) {
+      const days = Math.ceil(remaining / 86400);
+      result.unstakeAfter = `约 ${days} 天后可提取`;
+    } else {
+      result.unstakeAfter = "可以提取";
+    }
+  }
+
+  return result;
 }

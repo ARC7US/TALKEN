@@ -20,7 +20,8 @@ const ERC20_ABI = [
 
 const REGISTRY_ABI = [
   { name: "register", type: "function", stateMutability: "nonpayable", inputs: [{ name: "url", type: "string" }], outputs: [] },
-  { name: "staked", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "bool" }] },
+  { name: "isStaked", type: "function", stateMutability: "view", inputs: [{ name: "operator", type: "address" }], outputs: [{ name: "", type: "bool" }] },
+  { name: "stakes", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ type: "tuple", components: [{ name: "active", type: "bool" }, { name: "stakedAt", type: "uint256" }, { name: "unstakeAfter", type: "uint256" }] }] },
 ];
 
 const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
@@ -60,14 +61,14 @@ if (balance < STAKE_AMOUNT) {
   process.exit(1);
 }
 
-// 2. Check if already staked
-const alreadyStaked = await publicClient.readContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "staked", args: [account.address] });
+// 3. Check if already staked
+const alreadyStaked = await publicClient.readContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "isStaked", args: [account.address] });
 if (alreadyStaked) {
   console.log("该地址已经质押并注册过了。");
   process.exit(0);
 }
 
-// 3. Approve if needed
+// 4. Approve if needed
 const allowance = await publicClient.readContract({ address: TALKEN_TOKEN, abi: ERC20_ABI, functionName: "allowance", args: [account.address, RELAY_REGISTRY] });
 if (allowance < STAKE_AMOUNT) {
   console.log("正在授权 TALKEN...");
@@ -77,9 +78,10 @@ if (allowance < STAKE_AMOUNT) {
   console.log("授权确认");
 }
 
-// 4. Register
+// 5. Register
 console.log("正在注册中继节点...");
 const regHash = await walletClient.writeContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "register", args: [relayUrl] });
 console.log(`注册 TX: ${regHash}`);
 await publicClient.waitForTransactionReceipt({ hash: regHash });
 console.log(`质押成功! TX: ${regHash}`);
+console.log("注意: 质押后 7 天内无法解除质押。");

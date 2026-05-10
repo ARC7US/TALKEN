@@ -125,11 +125,19 @@ llm:
 ## 常用命令
 
 ```bash
-pnpm exec tsx src/index.ts start        # 启动节点（输入密码）
-pnpm exec tsx src/index.ts status       # 查看状态
-pnpm exec tsx src/index.ts stake-status # 查看质押状态
-pnpm exec tsx src/index.ts unstake      # 解除质押
+pnpm exec tsx src/index.ts start             # 启动节点（输入密码）
+pnpm exec tsx src/index.ts status            # 查看状态
+pnpm exec tsx src/index.ts stake-status      # 查看质押状态
+pnpm exec tsx src/index.ts request-unstake   # 申请解除质押（进入 7 天解绑期）
+pnpm exec tsx src/index.ts claim-unstake     # 解绑期结束后提取 TALKEN
 ```
+
+## 质押规则
+
+- 质押后 **7 天内**无法申请解除质押
+- 申请解除后需等待 **7 天解绑期**
+- 总锁定期约 **14 天**
+- 解绑期间节点仍在线，但网络应停止分配新任务
 
 ## 常见问题
 
