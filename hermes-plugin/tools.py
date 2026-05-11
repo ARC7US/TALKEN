@@ -128,31 +128,43 @@ def _discover_relays() -> list[str]:
             resp = client.post(rpc_url, json=payload, timeout=10)
             removed = resp.json().get("result", [])
 
-            removed_ops: set[str] = set()
-            for event in removed:
-                topics = event.get("topics", [])
-                if len(topics) > 1:
-                    op = "0x" + topics[1][-40:]
-                    removed_ops.add(op.lower())
+            # Build per-operator latest-event tracker (Registered vs Removed)
+            # Key: operator addr, Value: (block_number, "registered"|"removed", url_or_None)
+            latest_by_op: dict[str, tuple[int, str, str | None]] = {}
 
-            # Decode all relay URLs
-            all_relays: list[str] = []
             for event in registered:
                 topics = event.get("topics", [])
                 if len(topics) < 2:
                     continue
-                op = "0x" + topics[1][-40:]
-                if op.lower() in removed_ops:
-                    continue
+                op = "0x" + topics[1][-40:].lower()
+                block = int(event.get("blockNumber", "0x0"), 16)
+                url = None
                 data = event.get("data", "0x")
                 if len(data) > 130:
                     try:
                         url_hex = data[130:]
                         url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
-                        if url:
-                            all_relays.append(url)
                     except Exception:
                         pass
+                prev = latest_by_op.get(op)
+                if prev is None or block > prev[0]:
+                    latest_by_op[op] = (block, "registered", url)
+
+            for event in removed:
+                topics = event.get("topics", [])
+                if len(topics) < 2:
+                    continue
+                op = "0x" + topics[1][-40:].lower()
+                block = int(event.get("blockNumber", "0x0"), 16)
+                prev = latest_by_op.get(op)
+                if prev is None or block > prev[0]:
+                    latest_by_op[op] = (block, "removed", None)
+
+            # Keep only operators whose latest event is a registration
+            all_relays: list[str] = []
+            for op, (block, event_type, url) in latest_by_op.items():
+                if event_type == "registered" and url:
+                    all_relays.append(url)
 
             if not all_relays:
                 continue

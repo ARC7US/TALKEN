@@ -99,29 +99,41 @@ def _query_contract_events() -> list[dict]:
 
 
 def _decode_relay_events(registered: list, removed: list) -> list[str]:
-    """Decode event logs into relay URLs. Filter out removed operators."""
-    removed_operators = set()
-    for event in removed:
-        # Operator address is in topics[1]
-        operator = "0x" + event.get("topics", ["", ""])[1][-40:]
-        removed_operators.add(operator.lower())
+    """Decode event logs into relay URLs.
 
-    relays = []
+    Compares block numbers so that an operator whose latest event is a
+    registration is included even if a prior Removal exists on-chain.
+    """
+    # Build per-operator latest-event tracker
+    # Key: operator addr, Value: (block_number, "registered"|"removed", url_or_None)
+    latest_by_op: dict[str, tuple[int, str, str | None]] = {}
+
     for event in registered:
-        operator = "0x" + event.get("topics", ["", ""])[1][-40:]
-        if operator.lower() in removed_operators:
-            continue
-        # URL is ABI-encoded in data field
+        operator = "0x" + event.get("topics", ["", ""])[1][-40:].lower()
+        block = int(event.get("blockNumber", "0x0"), 16)
+        url = None
         data = event.get("data", "0x")
         if len(data) > 2:
             try:
-                # Skip offset and length prefix, decode UTF-8
-                url_hex = data[130:]  # Skip 0x + offset(64) + length(64)
+                url_hex = data[130:]
                 url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
-                if url:
-                    relays.append(url)
             except Exception:
                 pass
+        prev = latest_by_op.get(operator)
+        if prev is None or block > prev[0]:
+            latest_by_op[operator] = (block, "registered", url)
+
+    for event in removed:
+        operator = "0x" + event.get("topics", ["", ""])[1][-40:].lower()
+        block = int(event.get("blockNumber", "0x0"), 16)
+        prev = latest_by_op.get(operator)
+        if prev is None or block > prev[0]:
+            latest_by_op[operator] = (block, "removed", None)
+
+    relays = []
+    for op, (block, event_type, url) in latest_by_op.items():
+        if event_type == "registered" and url:
+            relays.append(url)
 
     return relays
 
