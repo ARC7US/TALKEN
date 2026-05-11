@@ -180,3 +180,12 @@ TALKEN_GET_ROLE = {
         "properties": {},
     },
 }
+
+TALKEN_DISCOVER_RELAYS = {
+    "name": "talken_discover_relays",
+    "description": "Query the Arbitrum blockchain for registered TALKEN relay/validator nodes. Automatically discovers relay URLs from on-chain events.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}

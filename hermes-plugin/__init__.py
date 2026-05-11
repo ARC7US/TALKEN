@@ -70,6 +70,13 @@ def register(ctx):
         handler=tools.talken_get_role,
     )
 
+    ctx.register_tool(
+        name="talken_discover_relays",
+        toolset="talken",
+        schema=schemas.TALKEN_DISCOVER_RELAYS,
+        handler=tools.talken_discover_relays,
+    )
+
     # Register hook to inject TALKEN context into LLM calls
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
 

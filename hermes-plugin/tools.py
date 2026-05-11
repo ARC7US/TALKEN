@@ -19,6 +19,21 @@ except ImportError:
 # Global state (shared across tool calls within a session)
 # ---------------------------------------------------------------------------
 
+RELAY_REGISTRY = os.environ.get(
+    "TALKEN_RELAY_REGISTRY", "0x085E3338c7C6BE74e5069838cde9AFE5B67e43c8"
+)
+# keccak256("RelayRegistered(address,string)")
+RELAY_REGISTERED_TOPIC = "0x97217390f369e3efe236e22ab9da0a8a131e8803fc2421f78bfe6b3d096bb1a8"
+# keccak256("RelayRemoved(address)")
+RELAY_REMOVED_TOPIC = "0x38dc67ab9b9813fcdcb7c44191cecd71547e9ab9b1939493cdd6a903965d5ffa"
+ARBITRUM_RPCS = [
+    "https://arb1.arbitrum.io/rpc",
+    "https://arbitrum.llamarpc.com",
+]
+
+_discovered_relays: list[str] = []
+_relays_cache_time: float = 0
+
 _state: dict[str, Any] = {
     "agent_id": None,
     "agent_name": None,
@@ -34,9 +49,91 @@ _state: dict[str, Any] = {
 }
 
 
+def _discover_relays() -> list[str]:
+    """Query RelayRegistered events from Arbitrum to find relay URLs."""
+    global _discovered_relays, _relays_cache_time
+
+    # Cache for 5 minutes
+    if _discovered_relays and time.time() - _relays_cache_time < 300:
+        return _discovered_relays
+
+    if RELAY_REGISTRY == "0x0000000000000000000000000000000000000000":
+        return []
+
+    client = _get_client()
+
+    for rpc_url in ARBITRUM_RPCS:
+        try:
+            # Query RelayRegistered events
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_getLogs",
+                "params": [{
+                    "address": RELAY_REGISTRY,
+                    "topics": [RELAY_REGISTERED_TOPIC],
+                    "fromBlock": "0x0",
+                    "toBlock": "latest",
+                }],
+                "id": 1,
+            }
+            resp = client.post(rpc_url, json=payload, timeout=10)
+            registered = resp.json().get("result", [])
+
+            # Query RelayRemoved events
+            payload["params"][0]["topics"] = [RELAY_REMOVED_TOPIC]
+            payload["id"] = 2
+            resp = client.post(rpc_url, json=payload, timeout=10)
+            removed = resp.json().get("result", [])
+
+            # Build set of removed operators
+            removed_ops: set[str] = set()
+            for event in removed:
+                topics = event.get("topics", [])
+                if len(topics) > 1:
+                    op = "0x" + topics[1][-40:]
+                    removed_ops.add(op.lower())
+
+            # Decode RelayRegistered URLs
+            relays: list[str] = []
+            for event in registered:
+                topics = event.get("topics", [])
+                if len(topics) < 2:
+                    continue
+                op = "0x" + topics[1][-40:]
+                if op.lower() in removed_ops:
+                    continue
+                data = event.get("data", "0x")
+                if len(data) > 130:
+                    try:
+                        url_hex = data[130:]
+                        url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
+                        if url:
+                            relays.append(url)
+                    except Exception:
+                        pass
+
+            if relays:
+                _discovered_relays = relays
+                _relays_cache_time = time.time()
+                return relays
+        except Exception:
+            continue
+
+    return _discovered_relays
+
+
 def _get_relay_url() -> str:
-    url = _state["relay_url"] or os.environ.get("TALKEN_RELAY_URL", "http://localhost:3001")
-    return url.rstrip("/")
+    # Priority: explicit state > env var > on-chain discovery > localhost
+    if _state["relay_url"]:
+        return _state["relay_url"].rstrip("/")
+    env_url = os.environ.get("TALKEN_RELAY_URL", "")
+    if env_url:
+        return env_url.rstrip("/")
+    discovered = _discover_relays()
+    if discovered:
+        _state["relay_url"] = discovered[0]
+        return discovered[0].rstrip("/")
+    return "http://localhost:3001"
 
 
 def _get_client():
@@ -355,6 +452,16 @@ def talken_get_role(args: dict, **kwargs) -> str:
         "role": _state["role"],
         "heartbeat_active": _state["running"],
         "relay_url": _get_relay_url(),
+    })
+
+
+def talken_discover_relays(args: dict, **kwargs) -> str:
+    relays = _discover_relays()
+    return json.dumps({
+        "success": True,
+        "relays": relays,
+        "count": len(relays),
+        "source": "on-chain (Arbitrum)" if relays else "none",
     })
 
 

@@ -52,9 +52,10 @@ RELAY_REGISTRY_CONTRACT = os.environ.get(
     "TALKEN_RELAY_REGISTRY", "0x085E3338c7C6BE74e5069838cde9AFE5B67e43c8"
 )
 
-# Event signature: RelayRegistered(address indexed operator, string url)
-RELAY_REGISTERED_TOPIC = "0x" + "RelayRegistered(address,string)"[:8].ljust(64, "0")
-RELAY_REMOVED_TOPIC = "0x" + "RelayRemoved(address)"[:8].ljust(64, "0")
+# keccak256("RelayRegistered(address,string)")
+RELAY_REGISTERED_TOPIC = "0x97217390f369e3efe236e22ab9da0a8a131e8803fc2421f78bfe6b3d096bb1a8"
+# keccak256("RelayRemoved(address)")
+RELAY_REMOVED_TOPIC = "0x38dc67ab9b9813fcdcb7c44191cecd71547e9ab9b1939493cdd6a903965d5ffa"
 
 _discovered_relays: list[str] = []
 _relay_latency: dict[str, float] = {}
