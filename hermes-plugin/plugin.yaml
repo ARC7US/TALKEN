@@ -14,7 +14,9 @@ provides_tools:
   - talken_discover_relays
 provides_hooks:
   - pre_llm_call
-requires_env:
+optional_env:
   - name: TALKEN_RELAY_URL
-    description: "TALKEN relay server URL (e.g. http://localhost:3001)"
+    description: "TALKEN relay server URL (optional, auto-discovered from chain if not set)"
     url: "https://github.com/talken/talken"
+  - name: TALKEN_RELAY_REGISTRY
+    description: "RelayRegistry contract address on Arbitrum (default: deployed address)"
