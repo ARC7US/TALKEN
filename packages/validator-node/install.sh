@@ -331,32 +331,28 @@ if [ -z "$detected_model" ]; then
     fail "模型名称不能为空。"
 fi
 
-# 写入配置
-if [ -n "$node_name" ]; then
-    sed -i "s/name: .*/name: \"$node_name\"/" "$CONFIG_FILE"
-fi
-
-if [ -n "$server_url" ]; then
-    sed -i "s|server_url: .*|server_url: \"$server_url\"|" "$CONFIG_FILE"
-fi
-
-# 写入 LLM 配置
-cat > /tmp/talken_llm.py << 'PYEOF'
-import sys, re
+# 写入所有配置（使用 Python，确保 UTF-8 安全）
+cat > /tmp/talken_config.py << 'PYEOF'
+import re, sys
 
 config_file = sys.argv[1]
-protocol = sys.argv[2]
-base_url = sys.argv[3]
-api_key = sys.argv[4]
-model = sys.argv[5]
+node_name = sys.argv[2]
+server_url = sys.argv[3]
+protocol = sys.argv[4]
+base_url = sys.argv[5]
+api_key = sys.argv[6]
+model = sys.argv[7]
 
-with open(config_file, 'r') as f:
+with open(config_file, 'r', encoding='utf-8', errors='replace') as f:
     content = f.read()
 
-# 替换 default_provider
+if node_name:
+    content = re.sub(r'name: ".*"', f'name: "{node_name}"', content)
+if server_url:
+    content = re.sub(r'server_url: ".*"', f'server_url: "{server_url}"', content)
+
 content = re.sub(r'default_provider:.*', f'default_provider: "custom"', content)
 
-# 构建新的 providers 块
 providers_block = f'''  providers:
     custom:
       protocol: "{protocol}"
@@ -365,30 +361,30 @@ providers_block = f'''  providers:
       model: "{model}"
       max_tokens: 4096'''
 
-# 替换 providers 部分
 content = re.sub(
     r'  providers:\n(?:    \w+:\n(?:      .*\n)*)*',
     providers_block + '\n',
     content
 )
 
-with open(config_file, 'w') as f:
+with open(config_file, 'w', encoding='utf-8') as f:
     f.write(content)
 PYEOF
 
 if command -v python3 &>/dev/null; then
-    python3 /tmp/talken_llm.py "$CONFIG_FILE" "$protocol" "$llm_base_url" "$api_key" "$detected_model"
+    python3 /tmp/talken_config.py "$CONFIG_FILE" "$node_name" "$server_url" "$protocol" "$llm_base_url" "$api_key" "$detected_model"
 elif command -v python &>/dev/null; then
-    python /tmp/talken_llm.py "$CONFIG_FILE" "$protocol" "$llm_base_url" "$api_key" "$detected_model"
+    python /tmp/talken_config.py "$CONFIG_FILE" "$node_name" "$server_url" "$protocol" "$llm_base_url" "$api_key" "$detected_model"
 else
-    # 纯 bash 后备方案
+    sed -i "s/name: .*/name: \"$node_name\"/" "$CONFIG_FILE"
+    sed -i "s|server_url: .*|server_url: \"$server_url\"|" "$CONFIG_FILE"
     sed -i "s|default_provider:.*|default_provider: \"custom\"|" "$CONFIG_FILE"
     sed -i "s|protocol:.*|protocol: \"$protocol\"|" "$CONFIG_FILE"
     sed -i "s|base_url:.*|base_url: \"$llm_base_url\"|" "$CONFIG_FILE"
     sed -i "/custom:/,/api_key:/ s|api_key:.*|api_key: \"$api_key\"|" "$CONFIG_FILE"
     sed -i "s|model:.*|model: \"$detected_model\"|" "$CONFIG_FILE"
 fi
-rm -f /tmp/talken_llm.py
+rm -f /tmp/talken_config.py
 
 ok "LLM 配置已保存: $protocol / $detected_model"
 
