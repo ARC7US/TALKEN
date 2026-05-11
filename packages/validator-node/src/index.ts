@@ -68,42 +68,10 @@ async function main() {
 function promptPassword(prompt: string): Promise<string> {
   return new Promise((resolve) => {
     const rl = createInterface({ input: process.stdin, output: process.stdout });
-    if (process.stdin.isTTY) {
-      (rl as any).terminal = true;
-    }
-
-    process.stdout.write(prompt);
-
-    let password = "";
-    const onData = (char: Buffer) => {
-      const c = char.toString();
-      if (c === "\n" || c === "\r") {
-        process.stdin.removeListener("data", onData);
-        process.stdin.pause();
-        rl.close();
-        process.stdout.write("\n");
-        resolve(password);
-      } else if (c === "" || c === "\b") {
-        if (password.length > 0) {
-          password = password.slice(0, -1);
-          process.stdout.write("\b \b");
-        }
-      } else {
-        password += c;
-        process.stdout.write("*");
-      }
-    };
-
-    if (process.stdin.isTTY) {
-      process.stdin.setRawMode(true);
-      process.stdin.resume();
-      process.stdin.on("data", onData);
-    } else {
-      rl.question("", (answer) => {
-        rl.close();
-        resolve(answer);
-      });
-    }
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
   });
 }
 
