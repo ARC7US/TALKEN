@@ -64,11 +64,40 @@ def _measure_latency(url: str) -> tuple[str, float]:
     return (url, float("inf"))
 
 
+def _get_public_ip() -> str:
+    """Get this machine's public IP for region matching."""
+    client = _get_client()
+    for svc in ["https://api.ipify.org", "https://ifconfig.me/ip"]:
+        try:
+            resp = client.get(svc, timeout=3)
+            return resp.text.strip()
+        except Exception:
+            continue
+    return ""
+
+
+def _ip_prefix(ip: str, bits: int = 16) -> str:
+    """Extract IP prefix for regional grouping."""
+    parts = ip.replace("ws://", "").replace("wss://", "").replace("http://", "").replace("https://", "")
+    # Extract host from URL
+    host = parts.split("/")[0].split(":")[0]
+    try:
+        import ipaddress
+        addr = ipaddress.ip_address(host)
+        if addr.version == 4:
+            # Return /16 prefix
+            octets = str(addr).split(".")
+            return ".".join(octets[:2]) if bits == 16 else ".".join(octets[:1])
+    except Exception:
+        pass
+    return host
+
+
 def _discover_relays() -> list[str]:
-    """Query RelayRegistered events from Arbitrum, then sort by network latency (nearest first)."""
+    """Query RelayRegistered events, filter by IP region, sample + ping for nearest."""
     global _discovered_relays, _relays_cache_time
 
-    # Cache for 5 minutes
+    # If we already have a working relay, keep using it (progressive)
     if _discovered_relays and time.time() - _relays_cache_time < 300:
         return _discovered_relays
 
@@ -79,7 +108,6 @@ def _discover_relays() -> list[str]:
 
     for rpc_url in ARBITRUM_RPCS:
         try:
-            # Query RelayRegistered events
             payload = {
                 "jsonrpc": "2.0",
                 "method": "eth_getLogs",
@@ -100,7 +128,6 @@ def _discover_relays() -> list[str]:
             resp = client.post(rpc_url, json=payload, timeout=10)
             removed = resp.json().get("result", [])
 
-            # Build set of removed operators
             removed_ops: set[str] = set()
             for event in removed:
                 topics = event.get("topics", [])
@@ -108,8 +135,8 @@ def _discover_relays() -> list[str]:
                     op = "0x" + topics[1][-40:]
                     removed_ops.add(op.lower())
 
-            # Decode RelayRegistered URLs
-            relays: list[str] = []
+            # Decode all relay URLs
+            all_relays: list[str] = []
             for event in registered:
                 topics = event.get("topics", [])
                 if len(topics) < 2:
@@ -123,17 +150,43 @@ def _discover_relays() -> list[str]:
                         url_hex = data[130:]
                         url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
                         if url:
-                            relays.append(url)
+                            all_relays.append(url)
                     except Exception:
                         pass
 
-            if relays:
-                # Sort by latency — nearest first
-                results = [_measure_latency(r) for r in relays]
-                results.sort(key=lambda x: x[1])
-                _discovered_relays = [r[0] for r in results if r[1] < float("inf")]
+            if not all_relays:
+                continue
+
+            # ── Smart selection: region filter → sample → ping ──
+            my_ip = _get_public_ip()
+            my_prefix = _ip_prefix(my_ip)
+
+            # Step 1: Group by IP prefix (same /16 = same region)
+            same_region = [r for r in all_relays if _ip_prefix(r) == my_prefix]
+            other_region = [r for r in all_relays if _ip_prefix(r) != my_prefix]
+
+            # Step 2: Prefer same region, but limit to reasonable sample size
+            import random
+            sample_size = 10
+            if len(same_region) <= sample_size:
+                candidates = same_region
+                # Fill remaining slots from other regions
+                remaining = sample_size - len(same_region)
+                if remaining > 0 and other_region:
+                    candidates += random.sample(other_region, min(remaining, len(other_region)))
+            else:
+                # Same region has many — random sample from it
+                candidates = random.sample(same_region, sample_size)
+
+            # Step 3: Ping candidates, pick fastest
+            results = [_measure_latency(r) for r in candidates]
+            results.sort(key=lambda x: x[1])
+            winners = [r[0] for r in results if r[1] < float("inf")]
+
+            if winners:
+                _discovered_relays = winners
                 _relays_cache_time = time.time()
-                return _discovered_relays
+                return winners
         except Exception:
             continue
 
