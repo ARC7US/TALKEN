@@ -339,11 +339,12 @@ export async function checkStakeStatus(address: string): Promise<{
   const publicClient = createPublicClient({ chain: arbitrum, transport: http(ARBITRUM_RPC) });
   const addr = address as Address;
 
-  const [stakeInfo, balance] = await Promise.all([
+  // Use staked() for current on-chain contract compatibility
+  const [isStaked, balance] = await Promise.all([
     publicClient.readContract({
       address: RELAY_REGISTRY,
       abi: REGISTRY_ABI,
-      functionName: "stakes",
+      functionName: "staked",
       args: [addr],
     }),
     publicClient.readContract({
@@ -352,35 +353,11 @@ export async function checkStakeStatus(address: string): Promise<{
       functionName: "balanceOf",
       args: [addr],
     }),
-  ]);
+  ]).catch(() => [false, 0n]);
 
-  const result: {
-    staked: boolean;
-    unbonding: boolean;
-    balance: string;
-    stakeAge?: string;
-    unstakeAfter?: string;
-  } = {
-    staked: stakeInfo.active,
-    unbonding: stakeInfo.active && stakeInfo.unstakeAfter > 0n,
-    balance: formatEther(balance),
+  return {
+    staked: isStaked as boolean,
+    unbonding: false,
+    balance: formatEther(balance as bigint),
   };
-
-  if (stakeInfo.active && stakeInfo.stakedAt > 0n) {
-    const age = Math.floor(Date.now() / 1000) - Number(stakeInfo.stakedAt);
-    const days = Math.floor(age / 86400);
-    result.stakeAge = `${days} 天`;
-  }
-
-  if (stakeInfo.active && stakeInfo.unstakeAfter > 0n) {
-    const remaining = Number(stakeInfo.unstakeAfter) - Math.floor(Date.now() / 1000);
-    if (remaining > 0) {
-      const days = Math.ceil(remaining / 86400);
-      result.unstakeAfter = `约 ${days} 天后可提取`;
-    } else {
-      result.unstakeAfter = "可以提取";
-    }
-  }
-
-  return result;
 }
