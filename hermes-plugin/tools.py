@@ -49,8 +49,23 @@ _state: dict[str, Any] = {
 }
 
 
+def _measure_latency(url: str) -> tuple[str, float]:
+    """Measure HTTP latency to a relay's /health endpoint. Returns (url, latency_ms)."""
+    http_url = url.replace("ws://", "http://").replace("wss://", "https://") + "/health"
+    client = _get_client()
+    try:
+        start = time.time()
+        resp = client.get(http_url, timeout=3)
+        elapsed = (time.time() - start) * 1000
+        if resp.status_code == 200:
+            return (url, elapsed)
+    except Exception:
+        pass
+    return (url, float("inf"))
+
+
 def _discover_relays() -> list[str]:
-    """Query RelayRegistered events from Arbitrum to find relay URLs."""
+    """Query RelayRegistered events from Arbitrum, then sort by network latency (nearest first)."""
     global _discovered_relays, _relays_cache_time
 
     # Cache for 5 minutes
@@ -113,9 +128,12 @@ def _discover_relays() -> list[str]:
                         pass
 
             if relays:
-                _discovered_relays = relays
+                # Sort by latency — nearest first
+                results = [_measure_latency(r) for r in relays]
+                results.sort(key=lambda x: x[1])
+                _discovered_relays = [r[0] for r in results if r[1] < float("inf")]
                 _relays_cache_time = time.time()
-                return relays
+                return _discovered_relays
         except Exception:
             continue
 
@@ -123,7 +141,7 @@ def _discover_relays() -> list[str]:
 
 
 def _get_relay_url() -> str:
-    # Priority: explicit state > env var > on-chain discovery > localhost
+    # Priority: explicit state > env var > on-chain discovery (nearest first) > localhost
     if _state["relay_url"]:
         return _state["relay_url"].rstrip("/")
     env_url = os.environ.get("TALKEN_RELAY_URL", "")
@@ -131,7 +149,7 @@ def _get_relay_url() -> str:
         return env_url.rstrip("/")
     discovered = _discover_relays()
     if discovered:
-        _state["relay_url"] = discovered[0]
+        _state["relay_url"] = discovered[0]  # nearest
         return discovered[0].rstrip("/")
     return "http://localhost:3001"
 
@@ -457,11 +475,19 @@ def talken_get_role(args: dict, **kwargs) -> str:
 
 def talken_discover_relays(args: dict, **kwargs) -> str:
     relays = _discover_relays()
+    # Re-measure latencies for fresh results
+    results = [_measure_latency(r) for r in relays]
+    results.sort(key=lambda x: x[1])
+    relay_info = [
+        {"url": r[0], "latency_ms": round(r[1], 1) if r[1] < float("inf") else "timeout"}
+        for r in results
+    ]
     return json.dumps({
         "success": True,
-        "relays": relays,
-        "count": len(relays),
-        "source": "on-chain (Arbitrum)" if relays else "none",
+        "relays": relay_info,
+        "nearest": relay_info[0]["url"] if relay_info else None,
+        "count": len(relay_info),
+        "source": "on-chain (Arbitrum) + latency sorted" if relays else "none",
     })
 
 
