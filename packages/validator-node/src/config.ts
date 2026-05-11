@@ -5,6 +5,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
+import YAML from "yaml";
 
 export interface LLMProviderConfig {
   protocol?: "openai" | "anthropic";
@@ -109,13 +110,10 @@ export function loadConfig(configPath?: string): ValidatorConfig {
 
   try {
     const content = readFileSync(path, "utf-8");
-    // Try JSON first, then simple YAML-like parsing
-    let parsed: Partial<ValidatorConfig>;
-    try {
-      parsed = JSON.parse(content);
-    } catch {
-      // Simple fallback: return defaults
-      parsed = {};
+    const parsed = YAML.parse(content) as Partial<ValidatorConfig>;
+    if (!parsed) {
+      console.warn(`Warning: Empty config at ${path}, using defaults.`);
+      return DEFAULT_CONFIG;
     }
     return mergeConfig(DEFAULT_CONFIG, parsed);
   } catch (err: any) {
@@ -129,7 +127,7 @@ export function saveConfig(config: ValidatorConfig, configPath?: string): void {
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 
-  const content = JSON.stringify(config, null, 2);
+  const content = YAML.stringify(config);
   writeFileSync(path, content, "utf-8");
 }
 
