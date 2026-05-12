@@ -57,89 +57,129 @@ RELAY_REGISTERED_TOPIC = "0x97217390f369e3efe236e22ab9da0a8a131e8803fc2421f78bfe
 # keccak256("RelayRemoved(address)")
 RELAY_REMOVED_TOPIC = "0x38dc67ab9b9813fcdcb7c44191cecd71547e9ab9b1939493cdd6a903965d5ffa"
 
+# Max blocks per eth_getLogs call (public RPCs reject larger ranges)
+BATCH_BLOCK_RANGE = 5000
+
 _discovered_relays: list[str] = []
 _relay_latency: dict[str, float] = {}
+_operator_states: dict[str, dict] = {}  # op_addr -> {block, status, url}
+_last_synced_block: int = 0
 
 
-def _query_contract_events() -> list[dict]:
-    """Query RelayRegistered and RelayRemoved events from Arbitrum."""
-    if RELAY_REGISTRY_CONTRACT == "0x0000000000000000000000000000000000000000":
-        return []
+def _get_current_block(client) -> int:
+    """Get latest Arbitrum block number."""
+    for rpc_url in ARBITRUM_RPCS:
+        try:
+            payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
+            resp = client.post(rpc_url, json=payload, timeout=10)
+            return int(resp.json()["result"], 16)
+        except Exception:
+            continue
+    return 0
+
+
+def _query_events_batch(client, rpc_url: str, from_block: int, to_block: int):
+    """Query both Registered and Removed events in one call using OR topic filter."""
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getLogs",
+        "params": [{
+            "address": RELAY_REGISTRY_CONTRACT,
+            "topics": [[RELAY_REGISTERED_TOPIC, RELAY_REMOVED_TOPIC]],
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+        }],
+        "id": 1,
+    }
+    resp = client.post(rpc_url, json=payload, timeout=15)
+    events = resp.json().get("result", [])
+    registered = [e for e in events if e.get("topics", [""])[0] == RELAY_REGISTERED_TOPIC]
+    removed = [e for e in events if e.get("topics", [""])[0] == RELAY_REMOVED_TOPIC]
+    return registered, removed
+
+
+def _decode_event(event: dict) -> tuple[str, str | None]:
+    """Decode an event into (operator_address, url_or_None_for_removal)."""
+    topics = event.get("topics", [])
+    if len(topics) < 2:
+        return "", None
+    op = "0x" + topics[1][-40:].lower()
+    data = event.get("data", "0x")
+    url = None
+    if len(data) > 130:
+        try:
+            url_hex = data[130:]
+            url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
+        except Exception:
+            pass
+    return op, url
+
+
+def _apply_events(events: list[dict], event_type: str):
+    """Update _operator_states with events. Only keeps the latest per operator."""
+    global _operator_states
+    for event in events:
+        block = int(event.get("blockNumber", "0x0"), 16)
+        op, url = _decode_event(event)
+        if not op:
+            continue
+        prev = _operator_states.get(op)
+        if prev is None or block > prev["block"]:
+            _operator_states[op] = {"block": block, "status": event_type, "url": url}
+
+
+def _sync_events():
+    """Incrementally sync relay events from chain.
+
+    First sync queries full history (fast when event count is low).
+    Subsequent syncs only fetch new blocks since last checkpoint.
+    Falls back to batch querying if full range is rejected by RPC.
+    """
+    global _last_synced_block
 
     client = _get_client()
+    current_block = _get_current_block(client)
+    if current_block == 0:
+        return
+
+    if _last_synced_block == 0:
+        from_block = 0
+    else:
+        from_block = _last_synced_block + 1
+
+    if from_block >= current_block:
+        return
 
     for rpc_url in ARBITRUM_RPCS:
         try:
-            # Get RelayRegistered events
-            payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_getLogs",
-                "params": [{
-                    "address": RELAY_REGISTRY_CONTRACT,
-                    "topics": [RELAY_REGISTERED_TOPIC],
-                    "fromBlock": "0x0",
-                    "toBlock": "latest",
-                }],
-                "id": 1,
-            }
-            resp = client.post(rpc_url, json=payload, timeout=10)
-            registered = resp.json().get("result", [])
+            # Try full range first (works when event count fits within RPC result limit)
+            registered, removed = _query_events_batch(client, rpc_url, from_block, current_block)
+            _apply_events(registered, "registered")
+            _apply_events(removed, "removed")
+            _last_synced_block = current_block
+            return
+        except Exception:
+            # Full range failed — batch through smaller chunks
+            pass
 
-            # Get RelayRemoved events
-            payload["params"][0]["topics"] = [RELAY_REMOVED_TOPIC]
-            payload["id"] = 2
-            resp = client.post(rpc_url, json=payload, timeout=10)
-            removed = resp.json().get("result", [])
-
-            return registered, removed
+        try:
+            batch_start = from_block
+            while batch_start <= current_block:
+                batch_end = min(batch_start + BATCH_BLOCK_RANGE - 1, current_block)
+                registered, removed = _query_events_batch(client, rpc_url, batch_start, batch_end)
+                _apply_events(registered, "registered")
+                _apply_events(removed, "removed")
+                batch_start = batch_end + 1
+            _last_synced_block = current_block
+            return
         except Exception:
             continue
 
-    return [], []
-
-
-def _decode_relay_events(registered: list, removed: list) -> list[str]:
-    """Decode event logs into relay URLs.
-
-    Compares block numbers so that an operator whose latest event is a
-    registration is included even if a prior Removal exists on-chain.
-    """
-    # Build per-operator latest-event tracker
-    # Key: operator addr, Value: (block_number, "registered"|"removed", url_or_None)
-    latest_by_op: dict[str, tuple[int, str, str | None]] = {}
-
-    for event in registered:
-        operator = "0x" + event.get("topics", ["", ""])[1][-40:].lower()
-        block = int(event.get("blockNumber", "0x0"), 16)
-        url = None
-        data = event.get("data", "0x")
-        if len(data) > 2:
-            try:
-                url_hex = data[130:]
-                url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
-            except Exception:
-                pass
-        prev = latest_by_op.get(operator)
-        if prev is None or block > prev[0]:
-            latest_by_op[operator] = (block, "registered", url)
-
-    for event in removed:
-        operator = "0x" + event.get("topics", ["", ""])[1][-40:].lower()
-        block = int(event.get("blockNumber", "0x0"), 16)
-        prev = latest_by_op.get(operator)
-        if prev is None or block > prev[0]:
-            latest_by_op[operator] = (block, "removed", None)
-
-    relays = []
-    for op, (block, event_type, url) in latest_by_op.items():
-        if event_type == "registered" and url:
-            relays.append(url)
-
-    return relays
-
 
 def _discover_relays() -> list[str]:
-    """Discover relay nodes: env override > on-chain registry > cached."""
+    """Discover relay nodes: env override > on-chain registry (incremental) > cached."""
+    global _discovered_relays
+
     # 1. User override for development
     env_url = os.environ.get("TALKEN_RELAY_URL")
     if env_url:
@@ -149,16 +189,22 @@ def _discover_relays() -> list[str]:
     if _discovered_relays:
         return _discovered_relays
 
-    # 3. Query on-chain registry
-    try:
-        registered, removed = _query_contract_events()
-        relays = _decode_relay_events(registered, removed)
-        if relays:
-            return relays
-    except Exception:
-        pass
+    if RELAY_REGISTRY_CONTRACT == "0x0000000000000000000000000000000000000000":
+        return []
 
-    return []
+    # 3. Incremental sync from chain
+    _sync_events()
+
+    # Build active relay list from synced operator states
+    relays: list[str] = []
+    for op, state in _operator_states.items():
+        if state["status"] == "registered" and state["url"]:
+            relays.append(state["url"])
+
+    if relays:
+        _discovered_relays = relays
+
+    return _discovered_relays
 
 
 def _measure_latency(url: str) -> float:

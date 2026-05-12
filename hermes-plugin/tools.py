@@ -31,8 +31,14 @@ ARBITRUM_RPCS = [
     "https://arbitrum.llamarpc.com",
 ]
 
+# Max blocks per eth_getLogs call (public RPCs reject larger ranges)
+BATCH_BLOCK_RANGE = 5000
+
+# Incremental relay sync state
 _discovered_relays: list[str] = []
 _relays_cache_time: float = 0
+_operator_states: dict[str, dict] = {}  # op_addr -> {block, status, url}
+_last_synced_block: int = 0
 
 _state: dict[str, Any] = {
     "agent_id": None,
@@ -93,6 +99,118 @@ def _ip_prefix(ip: str, bits: int = 16) -> str:
     return host
 
 
+def _get_current_block(client) -> int:
+    """Get latest Arbitrum block number."""
+    for rpc_url in ARBITRUM_RPCS:
+        try:
+            payload = {"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1}
+            resp = client.post(rpc_url, json=payload, timeout=10)
+            return int(resp.json()["result"], 16)
+        except Exception:
+            continue
+    return 0
+
+
+def _query_events_batch(client, rpc_url: str, from_block: int, to_block: int):
+    """Query both Registered and Removed events in one call using OR topic filter.
+    Returns (registered_events, removed_events).
+    """
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getLogs",
+        "params": [{
+            "address": RELAY_REGISTRY,
+            "topics": [[RELAY_REGISTERED_TOPIC, RELAY_REMOVED_TOPIC]],
+            "fromBlock": hex(from_block),
+            "toBlock": hex(to_block),
+        }],
+        "id": 1,
+    }
+    resp = client.post(rpc_url, json=payload, timeout=15)
+    events = resp.json().get("result", [])
+    registered = [e for e in events if e.get("topics", [""])[0] == RELAY_REGISTERED_TOPIC]
+    removed = [e for e in events if e.get("topics", [""])[0] == RELAY_REMOVED_TOPIC]
+    return registered, removed
+
+
+def _decode_event(event: dict) -> tuple[str, str | None]:
+    """Decode an event into (operator_address, url_or_None_for_removal)."""
+    topics = event.get("topics", [])
+    if len(topics) < 2:
+        return "", None
+    op = "0x" + topics[1][-40:].lower()
+    data = event.get("data", "0x")
+    url = None
+    if len(data) > 130:
+        try:
+            url_hex = data[130:]
+            url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
+        except Exception:
+            pass
+    return op, url
+
+
+def _apply_events(events: list[dict], event_type: str):
+    """Update _operator_states with events. Only keeps the latest per operator."""
+    global _operator_states
+    for event in events:
+        block = int(event.get("blockNumber", "0x0"), 16)
+        op, url = _decode_event(event)
+        if not op:
+            continue
+        prev = _operator_states.get(op)
+        if prev is None or block > prev["block"]:
+            _operator_states[op] = {"block": block, "status": event_type, "url": url}
+
+
+def _sync_events():
+    """Incrementally sync relay events from chain.
+
+    First sync queries full history (fast when event count is low).
+    Subsequent syncs only fetch new blocks since last checkpoint.
+    Falls back to batch querying if full range is rejected by RPC.
+    """
+    global _last_synced_block
+
+    client = _get_client()
+    current_block = _get_current_block(client)
+    if current_block == 0:
+        return
+
+    if _last_synced_block == 0:
+        from_block = 0
+    else:
+        from_block = _last_synced_block + 1
+
+    if from_block >= current_block:
+        return
+
+    for rpc_url in ARBITRUM_RPCS:
+        try:
+            # Try full range first (works when event count fits within RPC result limit)
+            registered, removed = _query_events_batch(client, rpc_url, from_block, current_block)
+            _apply_events(registered, "registered")
+            _apply_events(removed, "removed")
+            _last_synced_block = current_block
+            return
+        except Exception:
+            # Full range failed — batch through smaller chunks
+            pass
+
+        try:
+            batch_start = from_block
+            while batch_start <= current_block:
+                batch_end = min(batch_start + BATCH_BLOCK_RANGE - 1, current_block)
+                registered, removed = _query_events_batch(client, rpc_url, batch_start, batch_end)
+                _apply_events(registered, "registered")
+                _apply_events(removed, "removed")
+                batch_start = batch_end + 1
+            _last_synced_block = current_block
+            return
+        except Exception:
+            continue
+
+
 def _discover_relays() -> list[str]:
     """Query RelayRegistered events, filter by IP region, sample + ping for nearest."""
     global _discovered_relays, _relays_cache_time
@@ -104,103 +222,46 @@ def _discover_relays() -> list[str]:
     if RELAY_REGISTRY == "0x0000000000000000000000000000000000000000":
         return []
 
-    client = _get_client()
+    # Incremental sync from chain → updates _operator_states
+    _sync_events()
 
-    for rpc_url in ARBITRUM_RPCS:
-        try:
-            payload = {
-                "jsonrpc": "2.0",
-                "method": "eth_getLogs",
-                "params": [{
-                    "address": RELAY_REGISTRY,
-                    "topics": [RELAY_REGISTERED_TOPIC],
-                    "fromBlock": "0x0",
-                    "toBlock": "latest",
-                }],
-                "id": 1,
-            }
-            resp = client.post(rpc_url, json=payload, timeout=10)
-            registered = resp.json().get("result", [])
+    # Build active relay list from synced operator states
+    all_relays: list[str] = []
+    for op, state in _operator_states.items():
+        if state["status"] == "registered" and state["url"]:
+            all_relays.append(state["url"])
 
-            # Query RelayRemoved events
-            payload["params"][0]["topics"] = [RELAY_REMOVED_TOPIC]
-            payload["id"] = 2
-            resp = client.post(rpc_url, json=payload, timeout=10)
-            removed = resp.json().get("result", [])
+    if not all_relays:
+        return _discovered_relays
 
-            # Build per-operator latest-event tracker (Registered vs Removed)
-            # Key: operator addr, Value: (block_number, "registered"|"removed", url_or_None)
-            latest_by_op: dict[str, tuple[int, str, str | None]] = {}
+    # ── Smart selection: region filter → sample → ping ──
+    my_ip = _get_public_ip()
+    my_prefix = _ip_prefix(my_ip)
 
-            for event in registered:
-                topics = event.get("topics", [])
-                if len(topics) < 2:
-                    continue
-                op = "0x" + topics[1][-40:].lower()
-                block = int(event.get("blockNumber", "0x0"), 16)
-                url = None
-                data = event.get("data", "0x")
-                if len(data) > 130:
-                    try:
-                        url_hex = data[130:]
-                        url = bytes.fromhex(url_hex).decode("utf-8").rstrip("\x00")
-                    except Exception:
-                        pass
-                prev = latest_by_op.get(op)
-                if prev is None or block > prev[0]:
-                    latest_by_op[op] = (block, "registered", url)
+    # Step 1: Group by IP prefix (same /16 = same region)
+    same_region = [r for r in all_relays if _ip_prefix(r) == my_prefix]
+    other_region = [r for r in all_relays if _ip_prefix(r) != my_prefix]
 
-            for event in removed:
-                topics = event.get("topics", [])
-                if len(topics) < 2:
-                    continue
-                op = "0x" + topics[1][-40:].lower()
-                block = int(event.get("blockNumber", "0x0"), 16)
-                prev = latest_by_op.get(op)
-                if prev is None or block > prev[0]:
-                    latest_by_op[op] = (block, "removed", None)
+    # Step 2: Prefer same region, but limit to reasonable sample size
+    import random
+    sample_size = 10
+    if len(same_region) <= sample_size:
+        candidates = list(same_region)
+        remaining = sample_size - len(same_region)
+        if remaining > 0 and other_region:
+            candidates += random.sample(other_region, min(remaining, len(other_region)))
+    else:
+        candidates = random.sample(same_region, sample_size)
 
-            # Keep only operators whose latest event is a registration
-            all_relays: list[str] = []
-            for op, (block, event_type, url) in latest_by_op.items():
-                if event_type == "registered" and url:
-                    all_relays.append(url)
+    # Step 3: Ping candidates, pick fastest
+    results = [_measure_latency(r) for r in candidates]
+    results.sort(key=lambda x: x[1])
+    winners = [r[0] for r in results if r[1] < float("inf")]
 
-            if not all_relays:
-                continue
-
-            # ── Smart selection: region filter → sample → ping ──
-            my_ip = _get_public_ip()
-            my_prefix = _ip_prefix(my_ip)
-
-            # Step 1: Group by IP prefix (same /16 = same region)
-            same_region = [r for r in all_relays if _ip_prefix(r) == my_prefix]
-            other_region = [r for r in all_relays if _ip_prefix(r) != my_prefix]
-
-            # Step 2: Prefer same region, but limit to reasonable sample size
-            import random
-            sample_size = 10
-            if len(same_region) <= sample_size:
-                candidates = same_region
-                # Fill remaining slots from other regions
-                remaining = sample_size - len(same_region)
-                if remaining > 0 and other_region:
-                    candidates += random.sample(other_region, min(remaining, len(other_region)))
-            else:
-                # Same region has many — random sample from it
-                candidates = random.sample(same_region, sample_size)
-
-            # Step 3: Ping candidates, pick fastest
-            results = [_measure_latency(r) for r in candidates]
-            results.sort(key=lambda x: x[1])
-            winners = [r[0] for r in results if r[1] < float("inf")]
-
-            if winners:
-                _discovered_relays = winners
-                _relays_cache_time = time.time()
-                return winners
-        except Exception:
-            continue
+    if winners:
+        _discovered_relays = winners
+        _relays_cache_time = time.time()
+        return winners
 
     return _discovered_relays
 
