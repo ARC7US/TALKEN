@@ -38,7 +38,8 @@ import { format } from "util";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
-const foreground = args.includes("--foreground") || args.includes("-f");
+// Only check --foreground for the start command (avoid -f conflict with logs --follow)
+const foreground = command === "start" && (args.includes("--foreground") || args.includes("-f"));
 
 const TALKEN_DIR = join(homedir(), ".talken");
 const PID_FILE = join(TALKEN_DIR, "validator.pid");
@@ -132,6 +133,10 @@ function setupDaemon(): void {
 }
 
 async function runDaemon(privateKey: string): Promise<void> {
+  // Clear the key from env immediately after reading
+  delete process.env._TALKEN_DAEMON_KEY;
+  delete process.env._TALKEN_DAEMON;
+
   setupDaemon();
 
   const config = loadConfig();
