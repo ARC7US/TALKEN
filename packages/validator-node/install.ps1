@@ -390,20 +390,24 @@ if ($stakeExit -eq 0) {
 
 Remove-Item Env:\TALKEN_WALLET_PRIVATE_KEY
 
-# ── 7. 创建启动脚本 ──────────────────────────────────────────
+# ── 7. 创建管理脚本 ──────────────────────────────────────────
 
 Write-Host ""
-Info "创建启动脚本..."
+Info "创建管理脚本..."
 
 @"
 @echo off
 cd /d "$validatorDir"
-echo Starting TALKEN Validator Node...
-echo 请输入密钥密码以启动节点：
 pnpm --filter @talken/validator-node run start
 "@ | Out-File -FilePath "$INSTALL_DIR\start.cmd" -Encoding ascii
 
-Ok "启动脚本已创建"
+@"
+@echo off
+cd /d "$validatorDir"
+pnpm --filter @talken/validator-node run stop
+"@ | Out-File -FilePath "$INSTALL_DIR\stop.cmd" -Encoding ascii
+
+Ok "管理脚本已创建"
 
 # ── 完成 ─────────────────────────────────────────────────────
 
@@ -415,15 +419,12 @@ Write-Host ""
 Write-Host "  配置文件: $validatorDir\validator-config.yaml"
 Write-Host "  加密密钥: $env:USERPROFILE\.talken\key.enc"
 Write-Host ""
-Write-Host "  启动节点（需要输入密码）:" -ForegroundColor Cyan
+Write-Host "  启动节点:" -ForegroundColor Cyan
 Write-Host "    $INSTALL_DIR\start.cmd"
 Write-Host ""
-Write-Host "  常用命令（在 $INSTALL_DIR 目录下运行）:" -ForegroundColor Cyan
-Write-Host "    pnpm --filter @talken/validator-node run start"
-Write-Host "    pnpm --filter @talken/validator-node run dev status"
-Write-Host "    pnpm --filter @talken/validator-node run dev stake-status"
-Write-Host "    pnpm --filter @talken/validator-node run dev request-unstake"
-Write-Host "    pnpm --filter @talken/validator-node run dev claim-unstake"
+Write-Host "  管理命令:" -ForegroundColor Cyan
+Write-Host "    $INSTALL_DIR\stop.cmd      - 停止节点"
+Write-Host "    使用 talken-validator logs 查看日志"
 Write-Host ""
 Write-Host "  更多信息: $validatorDir\SETUP.md"
 Write-Host ""

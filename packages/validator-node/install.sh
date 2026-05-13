@@ -465,21 +465,39 @@ cat > "$INSTALL_DIR/start.sh" << SCRIPT
 #!/usr/bin/env bash
 cd "\$(dirname "\$0")"
 export PATH="$(dirname "$PNPM_PATH"):\$PATH"
-echo "Starting TALKEN Validator Node..."
-echo "请输入密钥密码以启动节点："
 "$PNPM_PATH" --filter @talken/validator-node run start
 SCRIPT
 chmod +x "$INSTALL_DIR/start.sh"
 
+cat > "$INSTALL_DIR/stop.sh" << SCRIPT
+#!/usr/bin/env bash
+cd "\$(dirname "\$0")"
+export PATH="$(dirname "$PNPM_PATH"):\$PATH"
+"$PNPM_PATH" --filter @talken/validator-node run stop
+SCRIPT
+chmod +x "$INSTALL_DIR/stop.sh"
+
+cat > "$INSTALL_DIR/logs.sh" << SCRIPT
+#!/usr/bin/env bash
+cd "\$(dirname "\$0")"
+export PATH="$(dirname "$PNPM_PATH"):\$PATH"
+"$PNPM_PATH" --filter @talken/validator-node run logs "\$@"
+SCRIPT
+chmod +x "$INSTALL_DIR/logs.sh"
+
 cat > "$INSTALL_DIR/start.cmd" << SCRIPT
 @echo off
 cd /d "%~dp0"
-echo Starting TALKEN Validator Node...
-echo 请输入密钥密码以启动节点：
 pnpm --filter @talken/validator-node run start
 SCRIPT
 
-ok "启动脚本已创建"
+cat > "$INSTALL_DIR/stop.cmd" << SCRIPT
+@echo off
+cd /d "%~dp0"
+pnpm --filter @talken/validator-node run stop
+SCRIPT
+
+ok "管理脚本已创建"
 
 # ── 完成 ─────────────────────────────────────────────────────
 
@@ -491,15 +509,13 @@ echo ""
 echo "  配置文件: $CONFIG_FILE"
 echo "  加密密钥: ~/.talken/key.enc"
 echo ""
-echo "  启动节点（需要输入密码）:"
+echo "  启动节点:"
 echo "    $INSTALL_DIR/start.sh"
 echo ""
-echo "  常用命令（在 ~/talken-validator 目录下运行）:"
-echo "    pnpm --filter @talken/validator-node run start"
-echo "    pnpm --filter @talken/validator-node run dev status"
-echo "    pnpm --filter @talken/validator-node run dev stake-status"
-echo "    pnpm --filter @talken/validator-node run dev request-unstake"
-echo "    pnpm --filter @talken/validator-node run dev claim-unstake"
+echo "  管理命令:"
+echo "    $INSTALL_DIR/stop.sh      - 停止节点"
+echo "    $INSTALL_DIR/logs.sh -f   - 查看实时日志"
+echo "    $INSTALL_DIR/logs.sh -n 20 - 查看最近 20 行日志"
 echo ""
 echo "  更多信息: $INSTALL_DIR/packages/validator-node/SETUP.md"
 echo ""

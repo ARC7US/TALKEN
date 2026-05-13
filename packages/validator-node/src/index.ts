@@ -5,8 +5,10 @@
  *
  * Usage:
  *   talken-validator init              - 初始化配置
- *   talken-validator start             - 启动节点（需要输入密码解密私钥）
+ *   talken-validator start             - 启动节点（后台守护进程）
+ *   talken-validator stop              - 停止守护进程
  *   talken-validator status            - 查看状态
+ *   talken-validator logs              - 查看日志
  *   talken-validator check             - 检查硬件
  *   talken-validator stake             - 质押 TALKEN 并注册
  *   talken-validator request-unstake   - 申请解除质押（进入 7 天解绑期）
@@ -20,11 +22,38 @@ import { NodeManager } from "./node-manager.js";
 import { stakeAndRegister, requestUnstake, claimUnstake, checkStakeStatus } from "./staking.js";
 import { encryptKey, decryptKey, hasKeyring } from "./keyring.js";
 import { createInterface } from "readline";
+import { spawn } from "child_process";
+import { homedir } from "os";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  unlinkSync,
+  createWriteStream,
+  watch,
+  statSync,
+} from "fs";
+import { join } from "path";
+import { format } from "util";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
+const foreground = args.includes("--foreground") || args.includes("-f");
+
+const TALKEN_DIR = join(homedir(), ".talken");
+const PID_FILE = join(TALKEN_DIR, "validator.pid");
+const LOG_FILE = join(TALKEN_DIR, "validator.log");
+
+// ── Main ──────────────────────────────────────────────────────────
 
 async function main() {
+  // Check if this is a daemon child process
+  const daemonKey = process.env._TALKEN_DAEMON_KEY;
+  if (process.env._TALKEN_DAEMON === "1" && daemonKey) {
+    await runDaemon(daemonKey);
+    return;
+  }
+
   switch (command) {
     case "init":
       await cmdInit();
@@ -32,8 +61,14 @@ async function main() {
     case "start":
       await cmdStart();
       break;
+    case "stop":
+      await cmdStop();
+      break;
     case "status":
       await cmdStatus();
+      break;
+    case "logs":
+      await cmdLogs();
       break;
     case "check":
       cmdCheck();
@@ -63,7 +98,68 @@ async function main() {
   }
 }
 
-// ── Helpers ─────────────────────────────────────────────────────
+// ── Daemon ───────────────────────────────────────────────────────
+
+function daemonize(privateKey: string): void {
+  const child = spawn(process.execPath, process.argv.slice(1), {
+    env: { ...process.env, _TALKEN_DAEMON: "1", _TALKEN_DAEMON_KEY: privateKey },
+    detached: true,
+    stdio: "ignore",
+  });
+  child.unref();
+  console.log(`守护进程已启动 (PID: ${child.pid})`);
+  console.log(`日志文件: ${LOG_FILE}`);
+  console.log(`停止节点: talken-validator stop`);
+}
+
+function setupDaemon(): void {
+  process.stdin.destroy();
+  try {
+    const logStream = createWriteStream(LOG_FILE, { flags: "a" });
+    const writer = (chunk: any) => {
+      try { logStream.write(typeof chunk === "string" ? chunk : String(chunk)); } catch {}
+    };
+    console.log = (...args: any[]) => writer(format(...args) + "\n");
+    console.error = (...args: any[]) => writer(format(...args) + "\n");
+    console.warn = (...args: any[]) => writer(format(...args) + "\n");
+    console.info = (...args: any[]) => writer(format(...args) + "\n");
+    process.stdout.write = writer as any;
+    process.stderr.write = writer as any;
+    writeFileSync(PID_FILE, String(process.pid));
+  } catch {
+    // If we can't set up logging, continue anyway (daemon still runs)
+  }
+}
+
+async function runDaemon(privateKey: string): Promise<void> {
+  setupDaemon();
+
+  const config = loadConfig();
+  const resolved = resolveEnvVars(config) as ValidatorConfig;
+
+  const manager = new NodeManager(resolved, privateKey);
+
+  process.on("SIGINT", () => {
+    manager.stop();
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", () => {
+    manager.stop();
+    process.exit(0);
+  });
+
+  try {
+    await manager.init();
+    await manager.start();
+    await new Promise(() => {});
+  } catch (err: any) {
+    console.error(`启动失败: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────
 
 function promptPassword(prompt: string): Promise<string> {
   return new Promise((resolve) => {
@@ -99,7 +195,7 @@ async function getPrivateKeyForAuth(): Promise<string> {
   }
 }
 
-// ── Commands ─────────────────────────────────────────────────────
+// ── Commands ──────────────────────────────────────────────────────
 
 function cmdHelp(): void {
   console.log(`
@@ -107,14 +203,23 @@ TALKEN Validator Node
 
 命令:
   init              初始化配置文件 (validator-config.yaml)
-  start             启动验证节点（需要输入密码解密私钥）
+  start             启动验证节点（后台守护进程，输入密码后自动转入后台）
+  stop              停止守护进程
   status            查看节点状态
+  logs              查看节点日志
   check             检查硬件是否满足要求
   stake             质押 TALKEN 并注册为中继节点
   request-unstake   申请解除质押（进入 7 天解绑期）
   claim-unstake     解绑期结束后提取 TALKEN
   stake-status      查看质押状态
   help              显示帮助信息
+
+start 选项:
+  --foreground, -f   前台运行（调试用，Ctrl+C 停止）
+
+logs 选项:
+  --lines N, -n N    显示最后 N 行（默认 50）
+  --follow, -f       持续跟踪日志（tail -f 模式）
 
 质押规则:
   - 质押后需等待 7 天才能申请解除质押
@@ -124,10 +229,13 @@ TALKEN Validator Node
 示例:
   talken-validator init
   talken-validator check
-  talken-validator stake              # 首次运行会要求输入私钥并加密存储
-  talken-validator start              # 输入密码解密私钥后启动
-  talken-validator request-unstake    # 申请解除质押
-  talken-validator claim-unstake      # 7 天后提取
+  talken-validator stake                 # 首次运行会要求输入私钥并加密存储
+  talken-validator start                 # 输入密码解密私钥后自动在后台启动
+  talken-validator status                # 查看节点状态
+  talken-validator logs --lines 20       # 查看最近 20 行日志
+  talken-validator logs -f               # 实时查看日志
+  talken-validator stop                  # 停止节点
+  talken-validator start --foreground    # 前台调试模式
 `);
 }
 
@@ -192,40 +300,169 @@ async function cmdStart(): Promise<void> {
     process.exit(1);
   }
 
-  // Start node
-  const manager = new NodeManager(resolved, privateKey);
+  // Foreground mode (debug)
+  if (foreground) {
+    console.log("\n前台模式启动（Ctrl+C 停止）...\n");
+    const manager = new NodeManager(resolved, privateKey);
 
-  process.on("SIGINT", () => {
-    console.log("\n正在停止节点...");
-    manager.stop();
-    process.exit(0);
-  });
+    process.on("SIGINT", () => {
+      console.log("\n正在停止节点...");
+      manager.stop();
+      process.exit(0);
+    });
 
-  process.on("SIGTERM", () => {
-    console.log("\n正在停止节点...");
-    manager.stop();
-    process.exit(0);
-  });
+    process.on("SIGTERM", () => {
+      console.log("\n正在停止节点...");
+      manager.stop();
+      process.exit(0);
+    });
 
-  try {
-    await manager.init();
-    await manager.start();
-    await new Promise(() => {});
-  } catch (err: any) {
-    console.error(`\n启动失败: ${err.message}`);
-    process.exit(1);
+    try {
+      await manager.init();
+      await manager.start();
+      await new Promise(() => {});
+    } catch (err: any) {
+      console.error(`\n启动失败: ${err.message}`);
+      process.exit(1);
+    }
   }
+
+  // Daemon mode (default): fork to background
+  daemonize(privateKey);
+}
+
+async function cmdStop(): Promise<void> {
+  if (!existsSync(PID_FILE)) {
+    console.log("没有正在运行的守护进程（PID 文件不存在）。");
+    return;
+  }
+
+  const pidStr = readFileSync(PID_FILE, "utf-8").trim();
+  const pid = parseInt(pidStr, 10);
+
+  if (!pid || isNaN(pid)) {
+    console.error("PID 文件损坏。");
+    unlinkSync(PID_FILE);
+    return;
+  }
+
+  // Check if process exists
+  try {
+    process.kill(pid, 0);
+  } catch {
+    console.log(`进程 ${pid} 已不在运行。`);
+    try { unlinkSync(PID_FILE); } catch {}
+    return;
+  }
+
+  console.log(`正在停止节点 (PID: ${pid})...`);
+  process.kill(pid, "SIGTERM");
+
+  // Wait up to 10s for graceful shutdown
+  let stopped = false;
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      process.kill(pid, 0);
+    } catch {
+      stopped = true;
+      break;
+    }
+  }
+
+  if (!stopped) {
+    console.log("节点未响应 SIGTERM，发送 SIGKILL...");
+    try { process.kill(pid, "SIGKILL"); } catch {}
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  try { unlinkSync(PID_FILE); } catch {}
+  console.log("节点已停止。");
 }
 
 async function cmdStatus(): Promise<void> {
-  const config = loadConfig();
-  try {
-    const manager = new NodeManager(config);
-    const status = await manager.formatStatus();
-    console.log(status);
-  } catch (err: any) {
-    console.error(`无法获取状态: ${err.message}`);
-    process.exit(1);
+  // Check PID file
+  let pidRunning = false;
+  let pid: number | null = null;
+
+  if (existsSync(PID_FILE)) {
+    const pidStr = readFileSync(PID_FILE, "utf-8").trim();
+    pid = parseInt(pidStr, 10);
+    if (pid && !isNaN(pid)) {
+      try {
+        process.kill(pid, 0);
+        pidRunning = true;
+      } catch {}
+    }
+  }
+
+  console.log("\n=== 节点状态 ===");
+  console.log(`守护进程:   ${pidRunning ? `运行中 (PID: ${pid})` : "未运行"}`);
+  console.log(`PID 文件:   ${PID_FILE}`);
+  console.log(`日志文件:   ${LOG_FILE}`);
+
+  if (pidRunning && pid) {
+    // Try health endpoint
+    const config = loadConfig();
+    const port = config.network.listen_port || 1789;
+    try {
+      const resp = await fetch(`http://localhost:${port}/health`);
+      if (resp.ok) {
+        const data = await resp.json() as any;
+        console.log(`端口:       ${port} (可达)`);
+        if (data.uptime) console.log(`运行时间:   ${Math.floor(data.uptime / 60)} 分钟`);
+      }
+    } catch {
+      console.log(`端口:       ${port} (无法连接)`);
+    }
+  }
+  console.log("");
+}
+
+async function cmdLogs(): Promise<void> {
+  if (!existsSync(LOG_FILE)) {
+    console.log("日志文件不存在，节点可能尚未启动。");
+    return;
+  }
+
+  const followIdx = args.indexOf("--follow");
+  const follow = followIdx !== -1 || args.includes("-f");
+
+  const linesIdx = args.indexOf("--lines");
+  const nIdx = args.indexOf("-n");
+  const lineIdx = linesIdx !== -1 ? linesIdx : nIdx !== -1 ? nIdx : -1;
+  const numLines = lineIdx !== -1 ? parseInt(args[lineIdx + 1], 10) || 50 : 50;
+
+  if (follow) {
+    // Tail -f mode
+    console.log(`跟踪日志: ${LOG_FILE} (Ctrl+C 退出)`);
+    let lastSize = statSync(LOG_FILE).size;
+    // Print last N lines first
+    const content = readFileSync(LOG_FILE, "utf-8");
+    const lines = content.split("\n");
+    const startIdx = Math.max(0, lines.length - numLines - 1);
+    process.stdout.write(lines.slice(startIdx).join("\n"));
+
+    const watcher = watch(LOG_FILE, () => {
+      try {
+        const newSize = statSync(LOG_FILE).size;
+        if (newSize > lastSize) {
+          const stream = readFileSync(LOG_FILE, "utf-8").slice(lastSize);
+          process.stdout.write(stream);
+          lastSize = newSize;
+        }
+      } catch {}
+    });
+
+    process.on("SIGINT", () => { watcher.close(); process.exit(0); });
+    process.on("SIGTERM", () => { watcher.close(); process.exit(0); });
+    await new Promise(() => {});
+  } else {
+    // Print last N lines
+    const content = readFileSync(LOG_FILE, "utf-8");
+    const lines = content.split("\n");
+    const startIdx = Math.max(0, lines.length - numLines);
+    console.log(lines.slice(startIdx).join("\n"));
   }
 }
 
@@ -378,7 +615,7 @@ function getConfigPath(): string {
   return undefined as any;
 }
 
-// ── Run ──────────────────────────────────────────────────────────
+// ── Run ────────────────────────────────────────────────────────────
 
 main().catch((err) => {
   console.error(err);
