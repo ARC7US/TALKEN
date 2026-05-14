@@ -143,7 +143,8 @@ def _sync_events():
         return
 
     if _last_synced_block == 0:
-        from_block = 0
+        # Start from a recent block — querying from 0 is rejected by public RPCs
+        from_block = max(0, current_block - 200000)
     else:
         from_block = _last_synced_block + 1
 
@@ -231,7 +232,7 @@ def _get_relay_url() -> str:
             _relay_latency[url] = _measure_latency(url)
     sorted_relays = sorted(relays, key=lambda u: _relay_latency.get(u, float("inf")))
     _discovered_relays = [r for r in sorted_relays if _relay_latency.get(r, float("inf")) < float("inf")]
-    return sorted_relays[0] if sorted_relays else BOOTSTRAP_RELAYS[0]
+    return sorted_relays[0] if sorted_relays else "http://localhost:1789"
 
 
 def _get_client():
@@ -257,6 +258,11 @@ def _sign_request(method: str, path: str, timestamp: str, body: str | None = Non
     return sig.hex()
 
 
+def _to_http_url(relay_url: str) -> str:
+    """Convert ws:// → http:// so httpx can make REST calls to the relay."""
+    return relay_url.replace("ws://", "http://").replace("wss://", "https://")
+
+
 def _api_request(method: str, path: str, body: dict | None = None) -> dict:
     """Make API request with automatic relay failover."""
     client = _get_client()
@@ -265,7 +271,7 @@ def _api_request(method: str, path: str, body: dict | None = None) -> dict:
 
     for relay_url in relays:
         try:
-            url = f"{relay_url}/api/v1{path}"
+            url = f"{_to_http_url(relay_url)}/api/v1{path}"
             return _do_request(client, method, url, body)
         except Exception as e:
             last_error = e

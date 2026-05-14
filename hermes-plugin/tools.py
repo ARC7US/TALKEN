@@ -178,7 +178,8 @@ def _sync_events():
         return
 
     if _last_synced_block == 0:
-        from_block = 0
+        # Start from a recent block — querying from 0 is rejected by public RPCs
+        from_block = max(0, current_block - 200000)
     else:
         from_block = _last_synced_block + 1
 
@@ -277,7 +278,7 @@ def _get_relay_url() -> str:
     if discovered:
         _state["relay_url"] = discovered[0]  # nearest
         return discovered[0].rstrip("/")
-    return "http://localhost:3001"
+    return "http://localhost:1789"
 
 
 def _get_client():
@@ -303,9 +304,14 @@ def _sign_request(method: str, path: str, timestamp: str, body: str | None = Non
     return sig.hex()
 
 
+def _to_http_url(relay_url: str) -> str:
+    """Convert ws:// → http:// so httpx can make REST calls to the relay."""
+    return relay_url.replace("ws://", "http://").replace("wss://", "https://")
+
+
 def _api_request(method: str, path: str, body: dict | None = None) -> dict:
     client = _get_client()
-    url = f"{_get_relay_url()}/api/v1{path}"
+    url = f"{_to_http_url(_get_relay_url())}/api/v1{path}"
     timestamp = str(int(time.time() * 1000))
 
     headers = {
