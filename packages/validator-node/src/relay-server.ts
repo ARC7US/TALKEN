@@ -133,11 +133,20 @@ export class RelayServer {
   }
 
   private handlePublishTask(ws: WebSocket, params: any, id: number): void {
+    const result = this.createTask(params);
+    if (result.error) {
+      this.send(ws, { id, error: result.error });
+    } else {
+      this.send(ws, { id, result: { task_id: result.taskId, status: "pending" } });
+    }
+  }
+
+  /** Creates a task from params and stores it. Returns taskId or error. */
+  private createTask(params: any): { taskId?: string; error?: string } {
     const { publisher, title, description, acceptance_criteria, reward, skills, deadline } = params;
 
     if (!publisher || !title || !description || !reward) {
-      this.send(ws, { id, error: "Missing required fields" });
-      return;
+      return { error: "Missing required fields: publisher, title, description, reward" };
     }
 
     const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -157,31 +166,33 @@ export class RelayServer {
     };
 
     this.tasks.set(taskId, task);
-
-    // Auto-match executor
     this.matchExecutor(task);
-
-    this.send(ws, { id, result: { task_id: taskId, status: task.status } });
     console.log(`Task published: ${taskId} (${title}, ${reward} TALKEN)`);
+    return { taskId };
   }
 
   private handleAcceptTask(ws: WebSocket, params: any, id: number): void {
+    const result = this.acceptTask(params);
+    if (result.error) {
+      this.send(ws, { id, error: result.error });
+    } else {
+      this.send(ws, { id, result: { success: true, task_id: result.taskId } });
+    }
+  }
+
+  private acceptTask(params: any): { taskId?: string; error?: string } {
     const { task_id, executor } = params;
     const task = this.tasks.get(task_id);
 
     if (!task) {
-      this.send(ws, { id, error: "Task not found" });
-      return;
+      return { error: "Task not found" };
     }
     if (task.status !== "pending" && task.status !== "matched") {
-      this.send(ws, { id, error: `Task is ${task.status}, cannot accept` });
-      return;
+      return { error: `Task is ${task.status}, cannot accept` };
     }
 
     task.executor = executor;
     task.status = "executing";
-
-    this.send(ws, { id, result: { success: true, task_id } });
 
     // Notify publisher
     this.notifyClient(task.publisher, {
@@ -189,29 +200,36 @@ export class RelayServer {
       params: { task_id, executor },
     });
     console.log(`Task ${task_id} accepted by ${executor}`);
+    return { taskId: task_id };
   }
 
   private handleSubmitResult(ws: WebSocket, params: any, id: number): void {
+    const result = this.submitResult(params);
+    if (result.error) {
+      this.send(ws, { id, error: result.error });
+    } else {
+      this.send(ws, { id, result: { success: true, task_id: result.taskId } });
+    }
+  }
+
+  private submitResult(params: any): { taskId?: string; error?: string } {
     const { task_id, executor, result } = params;
     const task = this.tasks.get(task_id);
 
     if (!task) {
-      this.send(ws, { id, error: "Task not found" });
-      return;
+      return { error: "Task not found" };
     }
     if (task.executor !== executor) {
-      this.send(ws, { id, error: "Not the assigned executor" });
-      return;
+      return { error: "Not the assigned executor" };
     }
 
     task.result = result;
     task.status = "submitted";
 
-    this.send(ws, { id, result: { success: true, task_id } });
-
     // Assign validators (3+1)
     this.assignValidators(task);
     console.log(`Task ${task_id} result submitted, assigning validators`);
+    return { taskId: task_id };
   }
 
   private handleListTasks(ws: WebSocket, params: any, id: number): void {
@@ -443,10 +461,22 @@ export class RelayServer {
     if (path === "/api/v1/tasks" && req.method === "POST") {
       this.readBody(req, (body) => {
         const agentId = req.headers["x-talken-agent-id"] as string;
-        const params = { ...body, publisher: agentId || body.publisher };
-        this.handlePublishTask({ send: () => {} } as any, params, 0);
-        const taskId = `task_${Date.now()}`;
-        this.jsonResponse(res, 201, { data: { id: taskId, status: "pending" } });
+        // Normalize hermes plugin format to internal format
+        const params = {
+          publisher: agentId || body.publisher,
+          title: body.params?.title || body.title || "",
+          description: body.params?.description || body.description || "",
+          acceptance_criteria: body.params?.acceptance_criteria || body.acceptance_criteria || "",
+          reward: body.fee || body.reward || 0,
+          skills: body.skill ? [body.skill] : (body.skills || []),
+          deadline: body.ttl ? Date.now() + body.ttl * 1000 : undefined,
+        };
+        const result = this.createTask(params);
+        if (result.error) {
+          this.jsonResponse(res, 400, { error: result.error });
+        } else {
+          this.jsonResponse(res, 201, { data: { id: result.taskId, status: "pending" } });
+        }
       });
       return;
     }
@@ -455,8 +485,12 @@ export class RelayServer {
     const acceptMatch = path.match(/^\/api\/v1\/tasks\/(.+)\/accept$/);
     if (acceptMatch && req.method === "POST") {
       const agentId = req.headers["x-talken-agent-id"] as string;
-      this.handleAcceptTask({ send: () => {} } as any, { task_id: acceptMatch[1], executor: agentId }, 0);
-      this.jsonResponse(res, 200, { data: { success: true } });
+      const acceptResult = this.acceptTask({ task_id: acceptMatch[1], executor: agentId });
+      if (acceptResult.error) {
+        this.jsonResponse(res, 400, { error: acceptResult.error });
+      } else {
+        this.jsonResponse(res, 200, { data: { success: true } });
+      }
       return;
     }
 
@@ -465,8 +499,12 @@ export class RelayServer {
     if (submitMatch && req.method === "POST") {
       this.readBody(req, (body) => {
         const agentId = req.headers["x-talken-agent-id"] as string;
-        this.handleSubmitResult({ send: () => {} } as any, { task_id: submitMatch[1], executor: agentId, result: body.result }, 0);
-        this.jsonResponse(res, 200, { data: { success: true } });
+        const submitResult = this.submitResult({ task_id: submitMatch[1], executor: agentId, result: body.result });
+        if (submitResult.error) {
+          this.jsonResponse(res, 400, { error: submitResult.error });
+        } else {
+          this.jsonResponse(res, 200, { data: { success: true } });
+        }
       });
       return;
     }
