@@ -20,7 +20,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 RELAY_REGISTRY = os.environ.get(
-    "TALKEN_RELAY_REGISTRY", "0x8207cA5B366075C96fa470Cb9318E03beb64b9f4"
+    "TALKEN_RELAY_REGISTRY", "0x48e58C867842c87cE7259C2f6cda7D48D199dbee"
 )
 # keccak256("RelayRegistered(address,string)")
 RELAY_REGISTERED_TOPIC = "0x97217390f369e3efe236e22ab9da0a8a131e8803fc2421f78bfe6b3d096bb1a8"

@@ -49,7 +49,7 @@ ARBITRUM_RPCS = [
 
 # RelayRegistry contract (deployed on Arbitrum)
 RELAY_REGISTRY_CONTRACT = os.environ.get(
-    "TALKEN_RELAY_REGISTRY", "0x8207cA5B366075C96fa470Cb9318E03beb64b9f4"
+    "TALKEN_RELAY_REGISTRY", "0x48e58C867842c87cE7259C2f6cda7D48D199dbee"
 )
 
 # keccak256("RelayRegistered(address,string)")

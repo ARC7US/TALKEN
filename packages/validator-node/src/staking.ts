@@ -10,7 +10,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 // Contract addresses on Arbitrum One
 const TALKEN_TOKEN: Address = "0x827559a7515631d621B8a5a4D30ab85667Daf228";
-const RELAY_REGISTRY: Address = "0x8207cA5B366075C96fa470Cb9318E03beb64b9f4";
+const RELAY_REGISTRY: Address = "0x48e58C867842c87cE7259C2f6cda7D48D199dbee";
 const STAKE_AMOUNT = parseEther("100");
 
 const ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc";
