@@ -77,7 +77,52 @@ if (-not $pnpmExe) {
 }
 Ok "pnpm $(pnpm -v)"
 
-# ── 2. 克隆仓库 ──────────────────────────────────────────────
+# ── 2. 硬件检查和公网 IP 检测 ─────────────────────────────────
+
+Write-Host ""
+Info "检查硬件..."
+try {
+    node -e "
+const { cpus, totalmem, freemem } = require('os');
+const cpu = cpus().length;
+const total = Math.round((totalmem() / 1024**3) * 10) / 10;
+const free = Math.round((freemem() / 1024**3) * 10) / 10;
+console.log('  CPU: ' + cpu + ' 核');
+console.log('  内存: ' + total + ' GB (可用 ' + free + ' GB)');
+if (cpu < 1 || total < 1) {
+  console.log('  硬件可能不足，节点可能运行不稳定。');
+} else {
+  console.log('  基础硬件满足最低要求 ✓');
+}
+" 2>&1
+} catch {
+    Warn "硬件检查未通过，节点可能运行不稳定"
+}
+
+Write-Host ""
+Info "检测公网 IP..."
+$DETECTED_IP = $null
+$ipServices = @(
+    "https://ifconfig.me",
+    "https://api.ipify.org",
+    "https://icanhazip.com",
+    "https://checkip.amazonaws.com"
+)
+foreach ($svc in $ipServices) {
+    try {
+        $DETECTED_IP = (Invoke-WebRequest -Uri $svc -TimeoutSec 5 -ErrorAction Stop).Content.Trim()
+        if ($DETECTED_IP) {
+            Ok "检测到公网 IP: $DETECTED_IP"
+            break
+        }
+    } catch {}
+}
+
+if (-not $DETECTED_IP) {
+    Warn "未能自动检测公网 IP，请手动输入。"
+}
+
+# ── 3. 克隆仓库 ──────────────────────────────────────────────
 
 Write-Host ""
 Info "正在下载 TALKEN 代码..."
@@ -97,7 +142,7 @@ if (-not (Test-Path $INSTALL_DIR)) {
 }
 Ok "代码下载完成"
 
-# ── 3. 安装依赖 ──────────────────────────────────────────────
+# ── 4. 安装依赖 ──────────────────────────────────────────────
 
 Write-Host ""
 Info "正在安装依赖..."
@@ -105,7 +150,7 @@ Set-Location $INSTALL_DIR
 pnpm install 2>&1 | Select-Object -Last 3
 Ok "依赖安装完成"
 
-# ── 4. 初始化配置 ────────────────────────────────────────────
+# ── 5. 初始化配置 ────────────────────────────────────────────
 
 Write-Host ""
 Info "初始化配置文件..."
@@ -173,7 +218,7 @@ scoring:
 }
 Ok "配置文件已生成"
 
-# ── 5. 交互式配置 ────────────────────────────────────────────
+# ── 6. 交互式配置 ────────────────────────────────────────────
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -186,11 +231,18 @@ if (-not $nodeName) { $nodeName = "my-validator-001" }
 
 Write-Host ""
 Write-Host "  你的节点需要一个公网可访问的地址。"
-Write-Host "  如果有公网 IP，输入 ws://你的IP:1789"
-Write-Host "  如果没有，按回车跳过（稍后可手动配置）"
-$serverUrl = Read-Host "  节点地址"
+if ($DETECTED_IP) {
+    $AUTO_URL = "ws://${DETECTED_IP}:1789"
+    Write-Host "  已自动检测到公网 IP，默认地址: $AUTO_URL"
+    $serverUrl = Read-Host "  节点地址 [$AUTO_URL]"
+    if (-not $serverUrl) { $serverUrl = $AUTO_URL }
+} else {
+    Write-Host "  输入 ws://你的IP:1789"
+    Write-Host "  如果没有，按回车跳过（稍后可手动配置）"
+    $serverUrl = Read-Host "  节点地址"
+}
 
-# ── 5a. LLM 配置 ─────────────────────────────────────────────
+# ── 6a. LLM 配置 ─────────────────────────────────────────────
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -311,17 +363,7 @@ $content = [regex]::Replace($content, '  providers:\n(?:    \w+:\n(?:      .*\n)
 $content | Out-File -FilePath $configFile -Encoding utf8
 Ok "LLM 配置已保存: $protocol / $detectedModel"
 
-# ── 5b. 硬件检查 ─────────────────────────────────────────────
-
-Write-Host ""
-Info "检查硬件..."
-try {
-    node "$INSTALL_DIR\packages\validator-node\scripts\check-hardware.mjs" 2>&1
-} catch {
-    Warn "硬件检查未通过，节点可能运行不稳定"
-}
-
-# ── 6. 质押（必须） ──────────────────────────────────────────
+# ── 7. 质押（必须） ──────────────────────────────────────────
 
 Write-Host ""
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -390,7 +432,7 @@ if ($stakeExit -eq 0) {
 
 Remove-Item Env:\TALKEN_WALLET_PRIVATE_KEY
 
-# ── 7. 创建管理脚本 ──────────────────────────────────────────
+# ── 8. 创建管理脚本 ──────────────────────────────────────────
 
 Write-Host ""
 Info "创建管理脚本..."

@@ -122,7 +122,45 @@ if ! command -v curl &>/dev/null; then
     fail "需要 curl。请安装: apt-get install curl"
 fi
 
-# ── 2. 克隆仓库 ──────────────────────────────────────────────
+# ── 2. 硬件检查 ──────────────────────────────────────────────
+
+echo ""
+info "检查硬件..."
+node -e "
+const { cpus, totalmem, freemem } = require('os');
+const cpu = cpus().length;
+const total = Math.round((totalmem() / 1024**3) * 10) / 10;
+const free = Math.round((freemem() / 1024**3) * 10) / 10;
+console.log('  CPU: ' + cpu + ' 核');
+console.log('  内存: ' + total + ' GB (可用 ' + free + ' GB)');
+if (cpu < 1 || total < 1) {
+  console.log('  硬件可能不足，节点可能运行不稳定。');
+} else {
+  console.log('  基础硬件满足最低要求 ✓');
+}
+" 2>&1 || warn "硬件检查未通过，节点可能运行不稳定"
+
+echo ""
+info "检测公网 IP..."
+DETECTED_IP=""
+# 多源尝试，取第一个成功的
+for ip_svc in \
+    "https://ifconfig.me" \
+    "https://api.ipify.org" \
+    "https://icanhazip.com" \
+    "https://checkip.amazonaws.com"; do
+    DETECTED_IP=$(curl -s --max-time 5 "$ip_svc" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$DETECTED_IP" ]; then
+        ok "检测到公网 IP: $DETECTED_IP"
+        break
+    fi
+done
+
+if [ -z "$DETECTED_IP" ]; then
+    warn "未能自动检测公网 IP，请手动输入。"
+fi
+
+# ── 3. 克隆仓库 ──────────────────────────────────────────────
 
 echo ""
 info "正在下载 TALKEN 代码..."
@@ -143,7 +181,7 @@ if [ ! -d "$INSTALL_DIR" ]; then
 fi
 ok "代码下载完成"
 
-# ── 3. 安装依赖 ──────────────────────────────────────────────
+# ── 4. 安装依赖 ──────────────────────────────────────────────
 
 echo ""
 info "正在安装依赖..."
@@ -153,7 +191,7 @@ info "正在编译..."
 pnpm --filter @talken/validator-node run build 2>&1 | tail -3
 ok "依赖安装完成"
 
-# ── 4. 初始化配置 ────────────────────────────────────────────
+# ── 5. 初始化配置 ────────────────────────────────────────────
 
 echo ""
 info "初始化配置文件..."
@@ -220,7 +258,7 @@ YAML
 fi
 ok "配置文件已生成"
 
-# ── 5. 交互式配置 ────────────────────────────────────────────
+# ── 6. 交互式配置 ────────────────────────────────────────────
 
 echo ""
 echo "═══════════════════════════════════════════"
@@ -234,11 +272,17 @@ node_name=$(ask "  节点名称 [my-validator-001]: " "my-validator-001")
 # 公网地址
 echo ""
 echo "  你的节点需要一个公网可访问的地址。"
-echo "  如果有公网 IP，输入 ws://你的IP:1789"
-echo "  如果没有，按回车跳过（稍后可手动配置）"
-server_url=$(ask "  节点地址: " "")
+if [ -n "$DETECTED_IP" ]; then
+    AUTO_URL="ws://${DETECTED_IP}:1789"
+    echo "  已自动检测到公网 IP，默认地址: $AUTO_URL"
+    server_url=$(ask "  节点地址 [$AUTO_URL]: " "$AUTO_URL")
+else
+    echo "  输入 ws://你的IP:1789"
+    echo "  如果没有，按回车跳过（稍后可手动配置）"
+    server_url=$(ask "  节点地址: " "")
+fi
 
-# ── 5a. LLM 配置 ─────────────────────────────────────────────
+# ── 6a. LLM 配置 ─────────────────────────────────────────────
 
 echo ""
 echo "═══════════════════════════════════════════"
@@ -388,13 +432,7 @@ rm -f /tmp/talken_config.py
 
 ok "LLM 配置已保存: $protocol / $detected_model"
 
-# ── 5b. 硬件检查 ─────────────────────────────────────────────
-
-echo ""
-info "检查硬件..."
-node "$INSTALL_DIR/packages/validator-node/scripts/check-hardware.mjs" 2>&1 || warn "硬件检查未通过，节点可能运行不稳定"
-
-# ── 6. 质押（必须） ──────────────────────────────────────────
+# ── 7. 质押（必须） ──────────────────────────────────────────
 
 echo ""
 echo "═══════════════════════════════════════════"
@@ -454,7 +492,7 @@ else
     warn "质押失败，跳过密钥加密存储。"
 fi
 
-# ── 7. 创建启动脚本 ──────────────────────────────────────────
+# ── 8. 创建启动脚本 ──────────────────────────────────────────
 
 echo ""
 info "创建启动脚本..."
