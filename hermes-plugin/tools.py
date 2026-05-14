@@ -29,6 +29,9 @@ RELAY_REMOVED_TOPIC = "0x38dc67ab9b9813fcdcb7c44191cecd71547e9ab9b1939493cdd6a90
 ARBITRUM_RPCS = [
     "https://arb1.arbitrum.io/rpc",
     "https://arbitrum.llamarpc.com",
+    "https://rpc.ankr.com/arbitrum",
+    "https://arbitrum-one.publicnode.com",
+    "https://1rpc.io/arb",
 ]
 
 # Max blocks per eth_getLogs call (public RPCs reject larger ranges)
@@ -606,6 +609,7 @@ def talken_get_role(args: dict, **kwargs) -> str:
 
 
 def talken_discover_relays(args: dict, **kwargs) -> str:
+    current_url = _get_relay_url()
     relays = _discover_relays()
     # Re-measure latencies for fresh results
     results = [_measure_latency(r) for r in relays]
@@ -619,7 +623,8 @@ def talken_discover_relays(args: dict, **kwargs) -> str:
         "relays": relay_info,
         "nearest": relay_info[0]["url"] if relay_info else None,
         "count": len(relay_info),
-        "source": "on-chain (Arbitrum) + latency sorted" if relays else "none",
+        "current": current_url,
+        "source": "on-chain (Arbitrum) + latency sorted" if relays else "no on-chain relays found, using fallback",
     })
 
 

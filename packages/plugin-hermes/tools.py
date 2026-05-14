@@ -43,8 +43,10 @@ TASK_PARAMS_TEMPLATE = {
 # Arbitrum RPC endpoints (public, no API key needed)
 ARBITRUM_RPCS = [
     "https://arb1.arbitrum.io/rpc",
-    "https://rpc.ankr.com/arbitrum",
     "https://arbitrum.llamarpc.com",
+    "https://rpc.ankr.com/arbitrum",
+    "https://arbitrum-one.publicnode.com",
+    "https://1rpc.io/arb",
 ]
 
 # RelayRegistry contract (deployed on Arbitrum)
