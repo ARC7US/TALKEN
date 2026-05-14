@@ -8,7 +8,7 @@ import { arbitrum } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 const TALKEN_TOKEN = "0x827559a7515631d621B8a5a4D30ab85667Daf228";
-const RELAY_REGISTRY = "0x085E3338c7C6BE74e5069838cde9AFE5B67e43c8";
+const RELAY_REGISTRY = "0x8207cA5B366075C96fa470Cb9318E03beb64b9f4";
 const STAKE_AMOUNT = parseEther("100");
 const ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc";
 
@@ -20,7 +20,7 @@ const ERC20_ABI = [
 
 const REGISTRY_ABI = [
   { name: "register", type: "function", stateMutability: "nonpayable", inputs: [{ name: "url", type: "string" }], outputs: [] },
-  { name: "staked", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "bool" }] },
+  { name: "isStaked", type: "function", stateMutability: "view", inputs: [{ name: "operator", type: "address" }], outputs: [{ name: "", type: "bool" }] },
 ];
 
 const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
@@ -61,7 +61,7 @@ if (balance < STAKE_AMOUNT) {
 }
 
 // 3. Check if already staked
-const alreadyStaked = await publicClient.readContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "staked", args: [account.address] });
+const alreadyStaked = await publicClient.readContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "isStaked", args: [account.address] });
 if (alreadyStaked) {
   console.log("该地址已经质押并注册过了。");
   process.exit(0);

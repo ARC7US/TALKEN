@@ -17,7 +17,6 @@ contract RelayRegistryTest is Test {
         token = new TalkenToken(deployer);
         registry = new RelayRegistry(address(token));
 
-        // Give relayOp enough TALKEN to stake
         vm.prank(deployer);
         token.transfer(relayOp, 2000 * 1e18);
     }
@@ -28,7 +27,7 @@ contract RelayRegistryTest is Test {
         registry.register("wss://relay1.example.com");
         vm.stopPrank();
 
-        assertTrue(registry.staked(relayOp));
+        assertTrue(registry.isStaked(relayOp));
     }
 
     function test_register_insufficientBalance() public {
@@ -38,16 +37,38 @@ contract RelayRegistryTest is Test {
         registry.register("wss://relay.example.com");
     }
 
-    function test_unregister() public {
+    function test_twoStepUnstake() public {
+        // Register
         vm.startPrank(relayOp);
         token.approve(address(registry), STAKE_AMOUNT);
         registry.register("wss://relay1.example.com");
+        assertTrue(registry.isStaked(relayOp));
 
+        // Cannot unstake before 7 days
+        vm.expectRevert("Must wait 7 days after staking before unstaking");
+        registry.requestUnstake();
+
+        // Fast-forward past MIN_STAKE_DURATION
+        vm.warp(block.timestamp + 8 days);
+
+        // Step 1: request unstake
+        registry.requestUnstake();
+        assertTrue(registry.isUnbonding(relayOp));
+        assertTrue(registry.isStaked(relayOp)); // still staked during unbonding
+
+        // Cannot claim before unbonding period ends
+        vm.expectRevert("Unbonding period not over");
+        registry.claimUnstake();
+
+        // Fast-forward past UNBONDING_PERIOD
+        vm.warp(block.timestamp + 8 days);
+
+        // Step 2: claim
         uint256 balBefore = token.balanceOf(relayOp);
-        registry.unregister();
+        registry.claimUnstake();
         uint256 balAfter = token.balanceOf(relayOp);
 
-        assertFalse(registry.staked(relayOp));
+        assertFalse(registry.isStaked(relayOp));
         assertEq(balAfter - balBefore, STAKE_AMOUNT);
         vm.stopPrank();
     }

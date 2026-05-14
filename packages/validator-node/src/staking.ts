@@ -10,7 +10,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 // Contract addresses on Arbitrum One
 const TALKEN_TOKEN: Address = "0x827559a7515631d621B8a5a4D30ab85667Daf228";
-const RELAY_REGISTRY: Address = "0x085E3338c7C6BE74e5069838cde9AFE5B67e43c8";
+const RELAY_REGISTRY: Address = "0x8207cA5B366075C96fa470Cb9318E03beb64b9f4";
 const STAKE_AMOUNT = parseEther("100");
 
 const ARBITRUM_RPC = "https://arb1.arbitrum.io/rpc";
@@ -53,13 +53,6 @@ const REGISTRY_ABI = [
     stateMutability: "nonpayable",
     inputs: [{ name: "url", type: "string" }],
     outputs: [],
-  },
-  {
-    name: "staked",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "", type: "address" }],
-    outputs: [{ name: "", type: "bool" }],
   },
   {
     name: "requestUnstake",
@@ -119,13 +112,6 @@ const REGISTRY_ABI = [
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
   },
-  {
-    name: "unregister",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [],
-    outputs: [],
-  },
 ] as const;
 
 export interface StakeResult {
@@ -180,7 +166,7 @@ export async function stakeAndRegister(
   const alreadyStaked = await publicClient.readContract({
     address: RELAY_REGISTRY,
     abi: REGISTRY_ABI,
-    functionName: "staked",
+    functionName: "isStaked",
     args: [account.address],
   });
   if (alreadyStaked) {
@@ -339,12 +325,11 @@ export async function checkStakeStatus(address: string): Promise<{
   const publicClient = createPublicClient({ chain: arbitrum, transport: http(ARBITRUM_RPC) });
   const addr = address as Address;
 
-  // Use staked() for current on-chain contract compatibility
   const [isStaked, balance] = await Promise.all([
     publicClient.readContract({
       address: RELAY_REGISTRY,
       abi: REGISTRY_ABI,
-      functionName: "staked",
+      functionName: "isStaked",
       args: [addr],
     }),
     publicClient.readContract({
