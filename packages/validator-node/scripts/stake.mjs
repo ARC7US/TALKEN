@@ -1,9 +1,9 @@
 /**
  * Standalone staking script — runs with plain `node`, no tsx needed.
- * Usage: TALKEN_WALLET_PRIVATE_KEY=0x... node scripts/stake.mjs <relay_url>
+ * Usage: TALKEN_WALLET_PRIVATE_KEY=0x... TALKEN_IP_HASH=0x... node scripts/stake.mjs <relay_url>
  */
 
-import { createPublicClient, createWalletClient, http, parseEther, formatEther } from "viem";
+import { createPublicClient, createWalletClient, http, parseEther, formatEther, keccak256, toHex } from "viem";
 import { arbitrum } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -19,20 +19,32 @@ const ERC20_ABI = [
 ];
 
 const REGISTRY_ABI = [
-  { name: "register", type: "function", stateMutability: "nonpayable", inputs: [{ name: "url", type: "string" }], outputs: [] },
+  { name: "register", type: "function", stateMutability: "nonpayable", inputs: [{ name: "url", type: "string" }, { name: "ipHash", type: "bytes32" }], outputs: [] },
   { name: "isStaked", type: "function", stateMutability: "view", inputs: [{ name: "operator", type: "address" }], outputs: [{ name: "", type: "bool" }] },
 ];
 
 const pk = process.env.TALKEN_WALLET_PRIVATE_KEY;
 const relayUrl = process.argv[2];
+let ipHash = process.env.TALKEN_IP_HASH;
 
 if (!pk) {
   console.error("TALKEN_WALLET_PRIVATE_KEY not set");
   process.exit(1);
 }
 if (!relayUrl) {
-  console.error("Usage: node stake.mjs <relay_url>");
+  console.error("Usage: TALKEN_WALLET_PRIVATE_KEY=0x... TALKEN_IP_HASH=0x... node stake.mjs <relay_url>");
   process.exit(1);
+}
+if (!ipHash) {
+  // Auto-detect IP and compute hash
+  const detectedIp = process.env.TALKEN_PUBLIC_IP;
+  if (detectedIp) {
+    ipHash = keccak256(toHex(detectedIp));
+    console.log(`IP Hash (自动): ${ipHash}`);
+  } else {
+    console.error("TALKEN_IP_HASH or TALKEN_PUBLIC_IP not set");
+    process.exit(1);
+  }
 }
 
 const key = pk.startsWith("0x") ? pk : `0x${pk}`;
@@ -78,8 +90,9 @@ if (allowance < STAKE_AMOUNT) {
 }
 
 // 5. Register
+console.log(`IP Hash: ${ipHash}`);
 console.log("正在注册中继节点...");
-const regHash = await walletClient.writeContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "register", args: [relayUrl] });
+const regHash = await walletClient.writeContract({ address: RELAY_REGISTRY, abi: REGISTRY_ABI, functionName: "register", args: [relayUrl, ipHash] });
 console.log(`注册 TX: ${regHash}`);
 await publicClient.waitForTransactionReceipt({ hash: regHash });
 console.log(`质押成功! TX: ${regHash}`);

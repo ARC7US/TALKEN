@@ -19,7 +19,7 @@
 import { loadConfig, saveConfig, resolveEnvVars, type ValidatorConfig } from "./config.js";
 import { checkHardware, formatHardwareReport } from "./hardware-check.js";
 import { NodeManager } from "./node-manager.js";
-import { stakeAndRegister, requestUnstake, claimUnstake, checkStakeStatus } from "./staking.js";
+import { stakeAndRegister, requestUnstake, claimUnstake, checkStakeStatus, verifyIpBinding, computeIpHash } from "./staking.js";
 import { encryptKey, decryptKey, hasKeyring } from "./keyring.js";
 import { createInterface } from "readline";
 import { spawn } from "child_process";
@@ -200,6 +200,26 @@ async function getPrivateKeyForAuth(): Promise<string> {
   }
 }
 
+async function detectPublicIp(): Promise<string | null> {
+  // Try multiple IP detection services
+  const services = [
+    "https://ifconfig.me",
+    "https://api.ipify.org",
+    "https://icanhazip.com",
+    "https://checkip.amazonaws.com",
+  ];
+  for (const svc of services) {
+    try {
+      const resp = await fetch(svc, { signal: AbortSignal.timeout(5000) });
+      const ip = (await resp.text()).trim();
+      if (ip && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
+        return ip;
+      }
+    } catch {}
+  }
+  return null;
+}
+
 // ── Commands ──────────────────────────────────────────────────────
 
 function cmdHelp(): void {
@@ -304,6 +324,27 @@ async function cmdStart(): Promise<void> {
     console.error("\n密码错误或密钥文件损坏。");
     process.exit(1);
   }
+
+  // Verify IP binding on chain
+  console.log("");
+  console.log("正在检测公网 IP...");
+  const publicIp = await detectPublicIp();
+  if (!publicIp) {
+    console.error("错误: 无法检测公网 IP。请确认服务器有公网访问。");
+    process.exit(1);
+  }
+  console.log(`公网 IP: ${publicIp}`);
+
+  const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
+  const { privateKeyToAccount: pkToAddr } = await import("viem/accounts");
+  const operatorAddr = pkToAddr(key as `0x${string}`).address;
+
+  const ipCheck = await verifyIpBinding(operatorAddr, publicIp);
+  if (!ipCheck.ok) {
+    console.error(`\nIP 绑定验证失败: ${ipCheck.error}`);
+    process.exit(1);
+  }
+  console.log("IP 绑定验证通过。");
 
   // Foreground mode (debug)
   if (foreground) {
@@ -503,10 +544,26 @@ async function cmdStake(): Promise<void> {
     console.log("私钥已加密存储。");
   }
 
+  // Detect public IP for IP binding
+  console.log("\n正在检测公网 IP...");
+  let publicIp = await detectPublicIp();
+  if (publicIp) {
+    console.log(`公网 IP: ${publicIp}`);
+  } else {
+    console.log("未能自动检测公网 IP。");
+    publicIp = await promptInput("请输入公网 IP: ");
+  }
+  if (!publicIp) {
+    console.error("IP 不能为空。质押需要绑定 IP 以防止女巫攻击。");
+    process.exit(1);
+  }
+  const ipHash = computeIpHash(publicIp);
+  console.log(`IP Hash: ${ipHash}`);
+
   // Get relay URL
   const config = loadConfig();
   const port = config.network.listen_port || 1789;
-  const defaultUrl = config.network.server_url || `ws://0.0.0.0:${port}`;
+  const defaultUrl = config.network.server_url || `ws://${publicIp}:${port}`;
 
   console.log(`\n默认中继地址: ${defaultUrl}`);
   const customUrl = await promptInput(`中继地址 [${defaultUrl}]: `);
@@ -514,7 +571,8 @@ async function cmdStake(): Promise<void> {
 
   try {
     console.log("\n=== TALKEN 中继节点质押 ===\n");
-    const result = await stakeAndRegister(privateKey, relayUrl);
+    console.log(`IP 绑定: ${publicIp} (hash: ${ipHash})`);
+    const result = await stakeAndRegister(privateKey, relayUrl, ipHash);
     if (result.success) {
       console.log(`\n质押成功！TX: ${result.txHash}`);
       console.log("你的节点已被注册到链上，其他 Agent 可以通过 RelayRegistry 发现你的节点。");

@@ -4,7 +4,7 @@
  * Unstake is a two-step process: requestUnstake → wait 7 days → claimUnstake.
  */
 
-import { createPublicClient, createWalletClient, http, parseEther, formatEther, type Address, type Hash } from "viem";
+import { createPublicClient, createWalletClient, http, parseEther, formatEther, keccak256, toHex, type Address, type Hash } from "viem";
 import { arbitrum } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
@@ -51,7 +51,10 @@ const REGISTRY_ABI = [
     name: "register",
     type: "function",
     stateMutability: "nonpayable",
-    inputs: [{ name: "url", type: "string" }],
+    inputs: [
+      { name: "url", type: "string" },
+      { name: "ipHash", type: "bytes32" },
+    ],
     outputs: [],
   },
   {
@@ -80,6 +83,7 @@ const REGISTRY_ABI = [
           { name: "active", type: "bool" },
           { name: "stakedAt", type: "uint256" },
           { name: "unstakeAfter", type: "uint256" },
+          { name: "ipHash", type: "bytes32" },
         ],
       },
     ],
@@ -128,9 +132,14 @@ function makeClient(privateKey: string) {
   return { account, publicClient, walletClient };
 }
 
+export function computeIpHash(ip: string): `0x${string}` {
+  return keccak256(toHex(ip));
+}
+
 export async function stakeAndRegister(
   privateKey: string,
   relayUrl: string,
+  ipHash: `0x${string}`,
 ): Promise<StakeResult> {
   const { account, publicClient, walletClient } = makeClient(privateKey);
 
@@ -206,7 +215,7 @@ export async function stakeAndRegister(
     address: RELAY_REGISTRY,
     abi: REGISTRY_ABI,
     functionName: "register",
-    args: [relayUrl],
+    args: [relayUrl, ipHash],
   });
   console.log(`注册 TX: ${registerHash}`);
   const registerReceipt = await publicClient.waitForTransactionReceipt({ hash: registerHash });
@@ -313,6 +322,42 @@ export async function claimUnstake(privateKey: string): Promise<StakeResult> {
  */
 export async function unstake(privateKey: string): Promise<StakeResult> {
   return requestUnstake(privateKey);
+}
+
+/**
+ * Verify that the current public IP matches the on-chain ipHash.
+ * Returns null if OK, or an error string.
+ */
+export async function verifyIpBinding(
+  address: string,
+  currentIp: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const publicClient = createPublicClient({ chain: arbitrum, transport: http(ARBITRUM_RPC) });
+  const addr = address as Address;
+
+  try {
+    const stakeInfo = await publicClient.readContract({
+      address: RELAY_REGISTRY,
+      abi: REGISTRY_ABI,
+      functionName: "stakes",
+      args: [addr],
+    });
+
+    const chainIpHash = (stakeInfo as any).ipHash as `0x${string}`;
+    if (chainIpHash === "0x0000000000000000000000000000000000000000000000000000000000000000") {
+      // No ipHash on chain — node was registered before IP binding was added
+      return { ok: false, error: "链上未绑定 IP。请在合约升级后重新质押以绑定 IP。" };
+    }
+
+    const currentIpHash = computeIpHash(currentIp);
+    if (currentIpHash !== chainIpHash) {
+      return { ok: false, error: `IP 不匹配。链上绑定的是另一个 IP，当前 IP (${currentIp}) 与此不符。` };
+    }
+
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: `IP 验证失败: ${err.message}` };
+  }
 }
 
 export async function checkStakeStatus(address: string): Promise<{

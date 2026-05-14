@@ -23,6 +23,7 @@ contract RelayRegistry {
         bool active;
         uint256 stakedAt;       // block.timestamp of register()
         uint256 unstakeAfter;   // 0 = no pending unstake; >0 = claimable after this time
+        bytes32 ipHash;         // keccak256(IP) — permanently bound on first registration
     }
 
     mapping(address => StakeInfo) public stakes;
@@ -32,9 +33,20 @@ contract RelayRegistry {
     }
 
     /// @notice Register as a relay node. Must hold >= MIN_STAKE TALKEN.
-    function register(string calldata url) external {
+    /// @param url WebSocket URL of the relay node.
+    /// @param ipHash keccak256(abi.encodePacked(IP)) — permanently bound on first registration.
+    function register(string calldata url, bytes32 ipHash) external {
         StakeInfo storage s = stakes[msg.sender];
         require(!s.active, "Already registered");
+        require(ipHash != 0, "IP hash required");
+
+        // IP binding: set on first registration, must match on re-registration
+        if (s.ipHash == 0) {
+            s.ipHash = ipHash;
+        } else {
+            require(ipHash == s.ipHash, "IP mismatch with original registration");
+        }
+
         require(talken.balanceOf(msg.sender) >= MIN_STAKE, "Insufficient TALKEN balance");
 
         talken.transferFrom(msg.sender, address(this), MIN_STAKE);

@@ -463,6 +463,17 @@ SERVER_URL_VAL=$(grep 'server_url' "$CONFIG_FILE" | sed 's/.*: *"\(.*\)".*/\1/')
 RELAY_URL="${SERVER_URL_VAL:-ws://0.0.0.0:$PORT_VAL}"
 
 # 使用独立脚本（纯 node，不依赖 tsx）
+if [ -n "$DETECTED_IP" ]; then
+    export TALKEN_PUBLIC_IP="$DETECTED_IP"
+else
+    # 最后尝试一次 IP 检测
+    DETECTED_IP=$(curl -s --max-time 5 https://ifconfig.me 2>/dev/null || echo "")
+    if [ -n "$DETECTED_IP" ]; then
+        export TALKEN_PUBLIC_IP="$DETECTED_IP"
+    else
+        warn "无法检测公网 IP，质押将无法绑定 IP"
+    fi
+fi
 TALKEN_WALLET_PRIVATE_KEY="$private_key" \
     node "$INSTALL_DIR/packages/validator-node/scripts/stake.mjs" "$RELAY_URL" 2>&1
 

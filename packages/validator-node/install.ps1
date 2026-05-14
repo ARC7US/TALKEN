@@ -400,6 +400,17 @@ if (-not $serverUrlMatch) {
 }
 
 $env:TALKEN_WALLET_PRIVATE_KEY = $privateKey
+if ($DETECTED_IP) {
+    $env:TALKEN_PUBLIC_IP = $DETECTED_IP
+} else {
+    # Retry IP detection
+    try {
+        $DETECTED_IP = (Invoke-WebRequest -Uri "https://ifconfig.me" -TimeoutSec 5 -ErrorAction Stop).Content.Trim()
+        $env:TALKEN_PUBLIC_IP = $DETECTED_IP
+    } catch {
+        Warn "无法检测公网 IP，IP 绑定可能失败"
+    }
+}
 node "$INSTALL_DIR\packages\validator-node\scripts\stake.mjs" $serverUrlMatch 2>&1
 $stakeExit = $LASTEXITCODE
 
