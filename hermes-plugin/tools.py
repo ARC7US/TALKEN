@@ -35,7 +35,9 @@ ARBITRUM_RPCS = [
 ]
 
 # Max blocks per eth_getLogs call (public RPCs reject larger ranges)
-BATCH_BLOCK_RANGE = 5000
+BATCH_BLOCK_RANGE = 50000
+# Initial lookup window for first sync (~6 days on Arbitrum)
+INITIAL_SYNC_WINDOW = 5_000_000
 
 # Incremental relay sync state
 _discovered_relays: list[str] = []
@@ -181,8 +183,8 @@ def _sync_events():
         return
 
     if _last_synced_block == 0:
-        # Start from a recent block — querying from 0 is rejected by public RPCs
-        from_block = max(0, current_block - 200000)
+        # First sync: scan far back enough to find deployment events (~6 days)
+        from_block = max(0, current_block - INITIAL_SYNC_WINDOW)
     else:
         from_block = _last_synced_block + 1
 

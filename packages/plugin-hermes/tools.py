@@ -60,7 +60,8 @@ RELAY_REGISTERED_TOPIC = "0x97217390f369e3efe236e22ab9da0a8a131e8803fc2421f78bfe
 RELAY_REMOVED_TOPIC = "0x38dc67ab9b9813fcdcb7c44191cecd71547e9ab9b1939493cdd6a903965d5ffa"
 
 # Max blocks per eth_getLogs call (public RPCs reject larger ranges)
-BATCH_BLOCK_RANGE = 5000
+BATCH_BLOCK_RANGE = 50000
+INITIAL_SYNC_WINDOW = 5_000_000
 
 _discovered_relays: list[str] = []
 _relay_latency: dict[str, float] = {}
@@ -146,7 +147,7 @@ def _sync_events():
 
     if _last_synced_block == 0:
         # Start from a recent block — querying from 0 is rejected by public RPCs
-        from_block = max(0, current_block - 200000)
+        from_block = max(0, current_block - INITIAL_SYNC_WINDOW)
     else:
         from_block = _last_synced_block + 1
 
